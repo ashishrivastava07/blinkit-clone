@@ -1,357 +1,44 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import './App.css'
 
+const products = [
+  { id: 1, name: 'Amul Taaza Milk', category: 'Dairy', image: '🥛', variants: [{ label: '500 ml', price: 29, mrp: 32, stock: 18 }, { label: '1 litre', price: 56, mrp: 64, stock: 12 }], description: 'Fresh toned milk, delivered chilled.' },
+  { id: 2, name: 'Farm Fresh Bananas', category: 'Fruits', image: '🍌', variants: [{ label: '500 g', price: 38, mrp: 45, stock: 20 }, { label: '1 kg', price: 72, mrp: 90, stock: 9 }], description: 'Naturally sweet, hand-picked bananas.' },
+  { id: 3, name: 'Brown Bread', category: 'Bakery', image: '🍞', variants: [{ label: '400 g', price: 45, mrp: 50, stock: 7 }], description: 'Soft whole-wheat bread for every breakfast.' },
+  { id: 4, name: 'Farm Eggs', category: 'Dairy', image: '🥚', variants: [{ label: '6 pieces', price: 55, mrp: 65, stock: 14 }, { label: '12 pieces', price: 105, mrp: 130, stock: 0 }], description: 'Protein-rich farm eggs.' },
+  { id: 5, name: 'Lay’s Classic Salted', category: 'Snacks', image: '🥔', variants: [{ label: '52 g', price: 20, mrp: 20, stock: 25 }], description: 'Crispy salted potato chips.' },
+  { id: 6, name: 'Tata Salt', category: 'Essentials', image: '🧂', variants: [{ label: '1 kg', price: 28, mrp: 30, stock: 16 }], description: 'Iodised salt for everyday cooking.' },
+  { id: 7, name: 'Coca-Cola', category: 'Beverages', image: '🥤', variants: [{ label: '750 ml', price: 40, mrp: 45, stock: 11 }, { label: '2.25 litre', price: 89, mrp: 95, stock: 5 }], description: 'Sparkling soft drink, served chilled.' },
+  { id: 8, name: 'Fresh Tomatoes', category: 'Vegetables', image: '🍅', variants: [{ label: '500 g', price: 29, mrp: 38, stock: 4 }, { label: '1 kg', price: 55, mrp: 76, stock: 0 }], description: 'Juicy, ripe tomatoes for your kitchen.' },
+]
+const categories = ['All', 'Dairy', 'Fruits', 'Vegetables', 'Snacks', 'Beverages', 'Bakery', 'Essentials']
+const icons = ['✨', '🥛', '🍎', '🥦', '🍪', '🥤', '🍞', '🧺']
+const money = value => `₹${value.toFixed(0)}`
+
 function App() {
-
-  // Products available in our store
-  const products = [
-    {
-      id: 1,
-      name: 'Amul Milk',
-      quantity: '1 litre',
-      price: 32,
-      image: '🥛',
-    },
-    {
-      id: 2,
-      name: 'Brown Bread',
-      quantity: '400 g',
-      price: 45,
-      image: '🍞',
-    },
-    {
-      id: 3,
-      name: 'Farm Eggs',
-      quantity: '6 pieces',
-      price: 55,
-      image: '🥚',
-    },
-    {
-      id: 4,
-      name: 'Cookies',
-      quantity: '200 g',
-      price: 40,
-      image: '🍪',
-    },
-  ]
-
-  // Cart state
-  const [cart, setCart] = useState([])
-  const [searchTerm, setSearchTerm] = useState('')
-
-  // Add product to cart
-  function addToCart(product) {
-
-    setCart((currentCart) => {
-
-      const existingProduct = currentCart.find(
-        (item) => item.id === product.id
-      )
-
-      // If product is already in cart,
-      // increase its quantity
-      if (existingProduct) {
-
-        return currentCart.map((item) =>
-          item.id === product.id
-            ? { ...item, cartQuantity: item.cartQuantity + 1 }
-            : item
-        )
-      }
-
-      // If product isn't in cart,
-      // add it with quantity 1
-      return [
-        ...currentCart,
-        {
-          ...product,
-          cartQuantity: 1,
-        },
-      ]
-    })
-  }
-// Decrease product quantity
-function decreaseQuantity(productId) {
-  setCart((currentCart) => {
-    return currentCart
-      .map((item) =>
-        item.id === productId
-          ? { ...item, cartQuantity: item.cartQuantity - 1 }
-          : item
-      )
-      .filter((item) => item.cartQuantity > 0)
-  })
+  const [cart, setCart] = useState(() => JSON.parse(localStorage.getItem('quickcart') || '[]'))
+  const [query, setQuery] = useState(''); const [category, setCategory] = useState('All'); const [sort, setSort] = useState('popular'); const [view, setView] = useState('shop'); const [selected, setSelected] = useState(null)
+  const [coupon, setCoupon] = useState(''); const [couponApplied, setCouponApplied] = useState(false); const [address, setAddress] = useState('221B, Green Park, New Delhi — 110016'); const [locationOpen, setLocationOpen] = useState(false)
+  const [loginOpen, setLoginOpen] = useState(false); const [phone, setPhone] = useState(''); const [otpSent, setOtpSent] = useState(false); const [user, setUser] = useState(() => localStorage.getItem('quickuser') || '')
+  const [payment, setPayment] = useState('UPI'); const [orders, setOrders] = useState(() => JSON.parse(localStorage.getItem('quickorders') || '[]'))
+  useEffect(() => localStorage.setItem('quickcart', JSON.stringify(cart)), [cart]); useEffect(() => localStorage.setItem('quickorders', JSON.stringify(orders)), [orders])
+  const visibleProducts = useMemo(() => products.filter(p => (category === 'All' || p.category === category) && p.name.toLowerCase().includes(query.toLowerCase())).sort((a, b) => sort === 'price-low' ? a.variants[0].price - b.variants[0].price : sort === 'price-high' ? b.variants[0].price - a.variants[0].price : 0), [query, category, sort])
+  const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0); const subtotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0); const productDiscount = cart.reduce((sum, item) => sum + (item.mrp - item.price) * item.quantity, 0); const couponDiscount = couponApplied ? Math.min(50, Math.round(subtotal * .1)) : 0; const delivery = subtotal >= 199 || subtotal === 0 ? 0 : 25; const total = Math.max(0, subtotal - couponDiscount + delivery)
+  const add = (product, variant = product.variants[0]) => { if (!variant.stock) return; const key = `${product.id}-${variant.label}`; setCart(old => { const found = old.find(i => i.key === key); return found ? old.map(i => i.key === key ? { ...i, quantity: Math.min(i.quantity + 1, variant.stock) } : i) : [...old, { key, name: product.name, image: product.image, variant: variant.label, price: variant.price, mrp: variant.mrp, stock: variant.stock, quantity: 1 }] }) }
+  const changeQty = (key, delta) => setCart(old => old.map(i => i.key === key ? { ...i, quantity: i.quantity + delta } : i).filter(i => i.quantity > 0)); const navTo = next => { setView(next); setSelected(null) }; const placeOrder = () => { if (!cart.length) return; setOrders(old => [{ id: `BLK${Date.now().toString().slice(-7)}`, items: cart, total, address, payment, status: 'Order placed', eta: '12–16 min', createdAt: new Date().toLocaleString() }, ...old]); setCart([]); navTo('orders') }
+  return <div className="app"><header><button className="brand" onClick={() => navTo('shop')}>blink<span>it</span></button><button className="location-button" onClick={() => setLocationOpen(true)}>📍 <small>Delivering to</small><b>{address.split('—')[0]}</b></button><label className="search">⌕ <input value={query} onChange={e => { setQuery(e.target.value); navTo('shop') }} placeholder="Search for milk, fruits, snacks..." /></label><button className="plain-btn" onClick={() => user ? navTo('profile') : setLoginOpen(true)}>{user || 'Login'}</button><button className="cart-button" onClick={() => navTo('cart')}>🛒 Cart {itemCount ? <em>{itemCount}</em> : ''}</button></header>
+    {view === 'shop' && <main><section className="hero"><div><span className="eyebrow">⚡ 10-minute delivery</span><h1>Groceries at your door, <i>in minutes.</i></h1><p>Fresh picks, daily essentials and great savings — delivered when you need them.</p><button className="primary" onClick={() => document.getElementById('products').scrollIntoView({ behavior: 'smooth' })}>Start shopping</button></div><div className="hero-art">🛵<span>🍎</span><span>🥬</span><span>🥛</span></div></section><section className="content"><div className="section-heading"><div><h2>Shop by category</h2><p>Everything you need, sorted simply.</p></div></div><div className="category-row">{categories.map((name, index) => <button key={name} className={category === name ? 'category active' : 'category'} onClick={() => setCategory(name)}><span>{icons[index]}</span>{name}</button>)}</div></section><section className="content" id="products"><div className="section-heading"><div><h2>{category === 'All' ? 'Popular near you' : category}</h2><p>{visibleProducts.length} products available</p></div><select value={sort} onChange={e => setSort(e.target.value)}><option value="popular">Sort: Popular</option><option value="price-low">Price: Low to high</option><option value="price-high">Price: High to low</option></select></div><div className="product-grid">{visibleProducts.map(product => <ProductCard key={product.id} product={product} onAdd={add} onDetails={p => { setSelected(p); setView('details') }} />)}</div>{!visibleProducts.length && <Empty icon="🔎" text="No products match that search." action="Clear search" onClick={() => setQuery('')} />}</section></main>}
+    {view === 'details' && selected && <main className="content detail"><button className="back" onClick={() => navTo('shop')}>← Back to shop</button><div className="detail-card"><div className="detail-image">{selected.image}</div><div><span className="tag">{selected.category}</span><h1>{selected.name}</h1><p>{selected.description}</p><b className="stock">✓ In stock · delivery in 10 min</b><h3>Choose size</h3><div className="variant-list">{selected.variants.map(v => <button key={v.label} disabled={!v.stock} onClick={() => add(selected, v)}><span><b>{v.label}</b><small>{v.stock ? `${v.stock} left` : 'Out of stock'}</small></span><strong>{money(v.price)}</strong>{v.stock ? 'ADD' : 'Unavailable'}</button>)}</div></div></div></main>}
+    {view === 'cart' && <main className="content checkout"><button className="back" onClick={() => navTo('shop')}>← Continue shopping</button><h1>Your cart</h1>{cart.length ? <div className="checkout-grid"><section className="cart-list">{cart.map(item => <article className="cart-item" key={item.key}><div className="mini-image">{item.image}</div><div><h3>{item.name}</h3><p>{item.variant}</p><b>{money(item.price)}</b></div><Quantity item={item} change={changeQty}/><button className="remove" onClick={() => changeQty(item.key, -item.quantity)}>Remove</button></article>)}</section><Bill {...{ subtotal, productDiscount, couponDiscount, delivery, total, coupon, setCoupon }} apply={() => setCouponApplied(coupon.toUpperCase() === 'SAVE10')} button="Proceed to checkout" onClick={() => navTo('checkout')} /></div> : <Empty icon="🛒" text="Your cart is waiting for some goodies." action="Shop now" onClick={() => navTo('shop')} />}</main>}
+    {view === 'checkout' && <main className="content checkout"><button className="back" onClick={() => navTo('cart')}>← Back to cart</button><h1>Checkout</h1><div className="checkout-grid"><section className="checkout-options"><h2>Delivery address</h2><label className="address-card"><input type="radio" defaultChecked name="address"/><span><b>Home</b><br/>{address}<br/><small>Delivery in 10–16 minutes</small></span></label><button className="link-button" onClick={() => setLocationOpen(true)}>Change / add address</button><h2>Payment method</h2>{['UPI', 'Card', 'Cash on delivery'].map(method => <label className="payment" key={method}><input type="radio" name="payment" checked={payment === method} onChange={() => setPayment(method)}/><span>{method === 'UPI' ? '◉' : method === 'Card' ? '▣' : '₹'}</span>{method}</label>)}</section><Bill {...{ subtotal, productDiscount, couponDiscount, delivery, total }} button={`Pay ${money(total)}`} onClick={placeOrder}/></div></main>}
+    {view === 'orders' && <main className="content"><h1>Your orders</h1>{orders.length ? orders.map(order => <article className="order-card" key={order.id}><div><span className="tag success">{order.status}</span><h2>Order #{order.id}</h2><p>{order.items.length} items · {order.createdAt}</p><p>Delivering to {order.address}</p></div><div className="tracking"><b>Arrives in {order.eta}</b><div className="track-line"><i/><i/><i/><i/></div><small>Order placed → Preparing → Picked up → Delivered</small></div><strong>{money(order.total)}</strong></article>) : <Empty icon="📦" text="No past orders yet." action="Start shopping" onClick={() => navTo('shop')} />}</main>}
+    {view === 'profile' && <main className="content profile"><h1>Hello, {user}</h1><div className="profile-grid"><article><h2>Saved addresses</h2><p>🏠 {address}</p><button className="link-button" onClick={() => setLocationOpen(true)}>Manage addresses</button></article><article><h2>Orders</h2><p>{orders.length} order{orders.length === 1 ? '' : 's'} placed with Blinkit</p><button className="link-button" onClick={() => navTo('orders')}>View order history</button></article></div></main>}
+    {locationOpen && <Modal close={() => setLocationOpen(false)}><h2>Choose delivery location</h2><p>We’ll check whether we deliver to your address.</p><input className="modal-input" value={address} onChange={e => setAddress(e.target.value)} placeholder="House / street / pincode"/><button className="primary wide" onClick={() => setLocationOpen(false)}>Confirm location</button></Modal>}
+    {loginOpen && <Modal close={() => setLoginOpen(false)}><h2>{otpSent ? 'Enter verification code' : 'Login or sign up'}</h2><p>{otpSent ? `We sent a demo OTP to ${phone}` : 'Use your mobile number to continue.'}</p><input className="modal-input" value={phone} onChange={e => setPhone(e.target.value)} placeholder={otpSent ? 'Enter any 6-digit code' : 'Mobile number'} maxLength={otpSent ? 6 : 10}/><button className="primary wide" onClick={() => { if (otpSent) { const display = `User ${phone.slice(-4)}`; setUser(display); localStorage.setItem('quickuser', display); setLoginOpen(false) } else if (phone.length === 10) setOtpSent(true) }}>{otpSent ? 'Verify & continue' : 'Send OTP'}</button></Modal>}<footer>blinkit clone · Built for fast, local grocery delivery</footer></div>
 }
-
-// Remove product completely
-function removeFromCart(productId) {
-  setCart((currentCart) =>
-    currentCart.filter((item) => item.id !== productId)
-  )
-}
-  // Calculate total number of items
-  const cartCount = cart.reduce(
-    (total, item) => total + item.cartQuantity,
-    0
-  )
-  const filteredProducts = products.filter((product) =>
-  product.name.toLowerCase().includes(searchTerm.toLowerCase())
-)
-
-  // Calculate total price
-  const cartTotal = cart.reduce(
-    (total, item) => total + item.price * item.cartQuantity,
-    0
-  )
-
-  return (
-    <div className="app">
-
-      {/* HEADER */}
-      <header className="header">
-
-        <div className="logo">
-          blinkit
-        </div>
-
-        <div className="location">
-          📍
-          <span>Deliver to</span>
-          <strong>Your Location</strong>
-        </div>
-
-        <div className="search">
-          🔍
-          <input
-  type="text"
-  placeholder="Search for products..."
-  value={searchTerm}
-  onChange={(e) => setSearchTerm(e.target.value)}
-/>
-        </div>
-
-        <button className="login-btn">
-          Login
-        </button>
-
-        <button className="cart-btn">
-          🛒 Cart {cartCount > 0 && `(${cartCount})`}
-        </button>
-
-      </header>
-
-
-      {/* HERO */}
-      <section className="hero-section">
-
-        <h1>
-          Groceries delivered within minutes
-        </h1>
-
-        <p>
-          Fresh groceries, snacks and everyday essentials
-          delivered straight to your doorstep.
-        </p>
-
-        <div className="hero-search">
-          🔍
-
-          <input
-  type="text"
-  placeholder="Search for milk, bread, fruits..."
-  value={searchTerm}
-  onChange={(e) => setSearchTerm(e.target.value)}
-/>
-
-        </div>
-
-      </section>
-
-
-      {/* CATEGORIES */}
-      <section className="section">
-
-        <h2>
-          Shop by Category
-        </h2>
-
-        <div className="categories">
-
-          <div className="category">
-            <div className="category-icon">🥛</div>
-            <p>Dairy</p>
-          </div>
-
-          <div className="category">
-            <div className="category-icon">🍎</div>
-            <p>Fruits</p>
-          </div>
-
-          <div className="category">
-            <div className="category-icon">🥦</div>
-            <p>Vegetables</p>
-          </div>
-
-          <div className="category">
-            <div className="category-icon">🍪</div>
-            <p>Snacks</p>
-          </div>
-
-          <div className="category">
-            <div className="category-icon">🥤</div>
-            <p>Drinks</p>
-          </div>
-
-          <div className="category">
-            <div className="category-icon">🧹</div>
-            <p>Household</p>
-          </div>
-
-        </div>
-
-      </section>
-
-
-      {/* PRODUCTS */}
-      <section className="section">
-
-        <h2>
-          Popular Products
-        </h2>
-
-        <div className="products">
-
-          {filteredProducts.map((product) => (
-
-            <div
-              className="product-card"
-              key={product.id}
-            >
-
-              <div className="product-image">
-                {product.image}
-              </div>
-
-              <h3>
-                {product.name}
-              </h3>
-
-              <p>
-                {product.quantity}
-              </p>
-
-              <strong>
-                ₹{product.price}
-              </strong>
-
-              <button
-                onClick={() => addToCart(product)}
-              >
-                ADD
-              </button>
-              
-
-            </div>
-
-          ))}
-
-        </div>
-
-      </section>
-
-{filteredProducts.length === 0 && (
-  <p className="no-products">
-    No products found 😔
-  </p>
-)}
-      {/* CART SUMMARY */}
-
-{cart.length > 0 && (
-
-  <section className="cart-section">
-
-    <h2>
-      Your Cart
-    </h2>
-
-    {cart.map((item) => (
-
-      <div
-        className="cart-item"
-        key={item.id}
-      >
-
-        <div className="cart-product">
-
-          <span className="cart-product-name">
-            {item.image} {item.name}
-          </span>
-
-          <span className="cart-product-quantity">
-            {item.quantity}
-          </span>
-
-        </div>
-
-
-        <div className="quantity-controls">
-
-          <button
-            className="quantity-btn"
-            onClick={() => decreaseQuantity(item.id)}
-          >
-            −
-          </button>
-
-          <span>
-            {item.cartQuantity}
-          </span>
-
-          <button
-            className="quantity-btn"
-            onClick={() => addToCart(item)}
-          >
-            +
-          </button>
-
-        </div>
-
-
-        <strong>
-          ₹{item.price * item.cartQuantity}
-        </strong>
-
-
-        <button
-          className="remove-btn"
-          onClick={() => removeFromCart(item.id)}
-        >
-          Remove
-        </button>
-
-      </div>
-
-    ))}
-
-
-    <div className="cart-total">
-
-      <strong>
-        Total
-      </strong>
-
-      <strong>
-        ₹{cartTotal}
-      </strong>
-
-    </div>
-
-  </section>
-
-)}
-
-    </div>
-  )
-}
-
+function ProductCard({ product, onAdd, onDetails }) { const v = product.variants[0]; const discount = Math.round((1 - v.price / v.mrp) * 100); return <article className="product-card"><button className="product-image" onClick={() => onDetails(product)}>{product.image}</button>{discount > 0 && <span className="offer">{discount}% OFF</span>}<h3>{product.name}</h3><p>{v.label}</p><div className="price-row"><strong>{money(v.price)}</strong>{v.mrp > v.price && <del>{money(v.mrp)}</del>}<button disabled={!v.stock} onClick={() => onAdd(product, v)}>{v.stock ? 'ADD' : 'OUT'}</button></div>{v.stock < 8 && v.stock > 0 && <small className="low-stock">Only {v.stock} left</small>}</article> }
+function Quantity({ item, change }) { return <div className="quantity"><button onClick={() => change(item.key, -1)}>−</button><b>{item.quantity}</b><button onClick={() => change(item.key, 1)} disabled={item.quantity >= item.stock}>+</button></div> }
+function Bill({ subtotal, productDiscount, couponDiscount, delivery, total, coupon, setCoupon, apply, button, onClick }) { return <aside className="bill"><h2>Bill details</h2>{setCoupon && <div className="coupon"><input value={coupon} onChange={e => setCoupon(e.target.value)} placeholder="Coupon code (SAVE10)"/><button onClick={apply}>Apply</button></div>}<p><span>Item total</span><b>{money(subtotal)}</b></p>{productDiscount > 0 && <p className="saving"><span>Product savings</span><b>−{money(productDiscount)}</b></p>}{couponDiscount > 0 && <p className="saving"><span>Coupon discount</span><b>−{money(couponDiscount)}</b></p>}<p><span>Delivery fee</span><b>{delivery ? money(delivery) : 'FREE'}</b></p><hr/><h3><span>To pay</span><span>{money(total)}</span></h3><button className="primary wide" onClick={onClick}>{button} →</button>{subtotal < 199 && subtotal > 0 && <small>Add {money(199-subtotal)} more for free delivery</small>}</aside> }
+function Empty({ icon, text, action, onClick }) { return <div className="empty"><span>{icon}</span><h2>{text}</h2><button className="primary" onClick={onClick}>{action}</button></div> }
+function Modal({ children, close }) { return <div className="overlay" onMouseDown={close}><div className="modal" onMouseDown={e => e.stopPropagation()}><button className="close" onClick={close}>×</button>{children}</div></div> }
 export default App

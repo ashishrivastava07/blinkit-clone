@@ -145,7 +145,7 @@ function removeFromCart(productId) {
       <section className="hero-section">
 
         <h1>
-          Groceries delivered in minutes
+          Groceries delivered within minutes
         </h1>
 
         <p>

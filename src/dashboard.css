@@ -1,0 +1,100 @@
+.dashboard-heading,
+.dashboard-panel-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.dashboard-heading {
+  margin-bottom: 18px;
+}
+
+.dashboard-heading h1,
+.dashboard-panel-heading h2 {
+  margin: 0;
+}
+
+.dashboard-heading .eyebrow {
+  margin: 0 0 7px;
+}
+
+.dashboard-panel {
+  padding: 20px;
+  margin: 18px 0;
+}
+
+.dashboard-panel > h2 {
+  margin: 0 0 12px;
+}
+
+.dashboard-panel-heading p,
+.dashboard-note {
+  margin: 6px 0 0;
+  color: #718071;
+  font-size: 13px;
+}
+
+.dashboard-panel-heading > a {
+  color: #0c831f;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.dashboard-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 0;
+  margin: 0;
+  border-bottom: 1px solid #edf1ed;
+  font-size: 13px;
+}
+
+.dashboard-row:last-child {
+  border-bottom: 0;
+}
+
+.dashboard-row b {
+  text-align: right;
+}
+
+.dashboard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.dashboard-actions .button {
+  background: #eaf6eb;
+  color: #176d24;
+}
+
+.dashboard-panel .orders .card {
+  box-shadow: none;
+}
+
+.dashboard-content .dashboard-panel .empty {
+  padding: 28px 12px;
+}
+
+@media (max-width: 650px) {
+  .dashboard-heading,
+  .dashboard-panel-heading {
+    align-items: flex-start;
+  }
+
+  .dashboard-heading {
+    flex-direction: column;
+  }
+
+  .dashboard-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .dashboard-row b {
+    text-align: left;
+  }
+}

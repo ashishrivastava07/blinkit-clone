@@ -85,9 +85,37 @@ function useAuth() {
 
 function Shell({ children, auth, kind = 'customer' }) {
   const navigate = useNavigate()
+  const [logoutError, setLogoutError] = useState('')
+  const [loggingOut, setLoggingOut] = useState(false)
   const links = kind === 'customer' ? [['/', 'Shop'], ['/search', 'Search'], ['/cart', 'Cart'], ['/orders', 'Orders'], ['/account', 'Account']] : kind === 'shopkeeper' ? [['/shopkeeper/dashboard', 'Overview'], ['/shopkeeper/products', 'Products'], ['/shopkeeper/orders', 'Orders'], ['/shopkeeper/inventory', 'Inventory'], ['/shopkeeper/store', 'Store']] : kind === 'delivery_agent' ? [['/delivery/dashboard', 'My deliveries'], ['/delivery/available-orders', 'Available'], ['/delivery/my-deliveries', 'History'], ['/delivery/profile', 'Profile']] : [['/admin/dashboard', 'Overview'], ['/admin/users', 'Users'], ['/admin/stores', 'Stores'], ['/admin/products', 'Products'], ['/admin/orders', 'Orders'], ['/admin/reports', 'Reports']]
-  const logout = async () => { await supabase.auth.signOut(); navigate('/login') }
-  return <div className={`app-shell ${kind}`}><header className="top"><Link className="logo" to={kind === 'customer' ? '/' : links[0][0]}>⚡ blinkit</Link><nav>{links.map(([to, label]) => <Link key={to} to={to}>{label}</Link>)}</nav><span className="user-name">{auth.profile?.name || auth.user?.email}</span><button className="ghost" onClick={logout}>Log out</button></header>{kind !== 'customer' && <aside><b>{kind.replace('_', ' ')}</b>{links.map(([to, label]) => <Link key={to} to={to}>{label}</Link>)}</aside>}<div className={kind === 'customer' ? '' : 'dashboard-content'}>{children}</div></div>
+  const logout = async () => {
+    setLoggingOut(true)
+    setLogoutError('')
+    try {
+      const { error } = await supabase.auth.signOut()
+      if (error) fail(error)
+      navigate('/login', { replace: true })
+    } catch (error) {
+      setLogoutError(error.message)
+    } finally {
+      setLoggingOut(false)
+    }
+  }
+  return (
+    <div className={`app-shell ${kind}`}>
+      <header className="top">
+        <Link className="logo" to={kind === 'customer' ? '/' : links[0][0]}>⚡ blinkit</Link>
+        <nav>{links.map(([to, label]) => <Link key={to} to={to}>{label}</Link>)}</nav>
+        <span className="user-name">{auth.profile?.name || auth.user?.email}</span>
+        <button className="ghost logout-button" type="button" onClick={logout} disabled={loggingOut}>
+          {loggingOut ? 'Logging out…' : 'Log out'}
+        </button>
+      </header>
+      {logoutError && <p className="logout-error" role="alert">{logoutError}</p>}
+      {kind !== 'customer' && <aside><b>{kind.replace('_', ' ')}</b>{links.map(([to, label]) => <Link key={to} to={to}>{label}</Link>)}</aside>}
+      <div className={kind === 'customer' ? '' : 'dashboard-content'}>{children}</div>
+    </div>
+  )
 }
 
 function Guard({ auth, role, children }) { if (auth.loading) return <Loading />; if (auth.error) return <main className="empty"><h1>Unable to load your account</h1><Message error={auth.error} /><button onClick={() => supabase.auth.signOut()}>Sign out and try again</button></main>; if (!auth.user) return <Navigate to="/login" replace />; if (role && !auth.roles.includes(role)) return <Navigate to="/unauthorized" replace />; return children }

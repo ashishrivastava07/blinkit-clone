@@ -114,6 +114,15 @@ function Shell({ children, auth, kind = 'customer' }) {
           {loggingOut ? 'Logging out…' : 'Log out'}
         </button>
       </header>
+      <button
+        className="mobile-logout-button"
+        type="button"
+        onClick={logout}
+        disabled={loggingOut}
+        aria-label="Log out of your account"
+      >
+        {loggingOut ? 'Logging out…' : 'Log out'}
+      </button>
       {logoutError && <p className="logout-error" role="alert">{logoutError}</p>}
       {kind !== 'customer' && <aside><b>{kind.replace('_', ' ')}</b>{links.map(([to, label]) => <Link key={to} to={to}>{label}</Link>)}</aside>}
       <div className={kind === 'customer' ? '' : 'dashboard-content'}>{children}</div>

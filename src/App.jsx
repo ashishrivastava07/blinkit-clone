@@ -64,11 +64,14 @@ function useAuth() {
       }
     }
 
+    const initialRequestId = requestId
     supabase.auth.getSession().then(({ data, error }) => {
       if (error) throw error
-      return load(data.session)
+      if (active && requestId === initialRequestId) return load(data.session)
     }).catch(error => {
-      if (active) setState({ loading: false, user: null, roles: [], profile: null, error: error.message })
+      if (active && requestId === initialRequestId) {
+        setState({ loading: false, user: null, roles: [], profile: null, error: error.message })
+      }
     })
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       setTimeout(() => {

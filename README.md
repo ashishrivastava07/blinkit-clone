@@ -31,6 +31,10 @@ database RPCs are the backend authority.
 - Admin: `/admin/dashboard`, `/admin/users`, `/admin/stores`,
   `/admin/products`, `/admin/orders`, `/admin/reports`
 
+Client-side routes support direct refreshes through the included
+`public/_redirects` (Netlify/Cloudflare Pages) and `vercel.json` (Vercel)
+single-page-app fallback rules.
+
   Staff sign-in now redirects to the dashboard for the user's highest-privilege
   role. Dashboards have a refresh action and surface database errors instead of
   silently showing empty results. Delivery agents must go online before the

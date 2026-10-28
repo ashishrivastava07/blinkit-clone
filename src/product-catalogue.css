@@ -1,8 +1,15 @@
 .product-image {
   position: relative;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 4 / 3;
+  min-height: 0;
+  display: grid;
+  place-items: center;
   overflow: hidden;
   padding: 0;
-  background: linear-gradient(145deg, #f3f8ef, #e4efe1);
+  border-radius: 11px;
+  background: #f7f8f4;
 }
 
 .product-image-fallback-label,
@@ -22,13 +29,9 @@
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain;
-  padding: 8px;
-  transition: transform 220ms ease;
-}
-
-.product-card:hover .product-image img {
-  transform: scale(1.04);
+  object-fit: cover;
+  object-position: center;
+  padding: 0;
 }
 
 .product-image.image-fallback {
@@ -81,7 +84,8 @@
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
+  object-position: center;
 }
 
 .product-card > small {
@@ -132,12 +136,15 @@
 
 .product-detail-image {
   position: relative;
-  min-height: 340px;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  min-height: 0;
+  max-height: 460px;
   overflow: hidden;
   display: grid;
   place-items: center;
   border-radius: 14px;
-  background: linear-gradient(145deg, #f3f8ef, #e4efe1);
+  background: #f7f8f4;
 }
 
 .product-detail-image img {
@@ -145,8 +152,9 @@
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: contain;
-  padding: 20px;
+  object-fit: cover;
+  object-position: center;
+  padding: 0;
 }
 
 .product-detail-image.image-fallback {
@@ -244,6 +252,41 @@
 
 .product-detail-section {
   margin-top: 20px;
+}
+
+.account-logout-section {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 20px;
+  padding: 20px;
+  border: 1px solid #f0d7d7;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.account-logout-section h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.account-logout-section p {
+  margin: 5px 0 0;
+  color: #718071;
+  font-size: 13px;
+}
+
+.account-logout-button {
+  flex: 0 0 auto;
+  min-width: 112px;
+  background: #a92f2f;
+}
+
+.account-logout-error {
+  flex-basis: 100%;
+  color: #992b2b !important;
   padding: clamp(18px, 4vw, 30px);
 }
 
@@ -708,19 +751,14 @@
   white-space: pre-wrap;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .product-image img {
-    transition: none;
-  }
-}
-
 @media (max-width: 700px) {
   .product-detail {
     grid-template-columns: 1fr;
   }
 
   .product-detail-image {
-    min-height: 260px;
+    max-height: none;
+    aspect-ratio: 1 / 1;
   }
 
   .product-feature-list {
@@ -730,6 +768,17 @@
   .account-content-grid,
   .account-address-list {
     grid-template-columns: 1fr;
+  }
+
+  .account-logout-section {
+    align-items: stretch;
+    flex-direction: column;
+    margin-bottom: 90px;
+  }
+
+  .account-logout-button {
+    width: 100%;
+    min-height: 48px;
   }
 
   .account-page-heading {

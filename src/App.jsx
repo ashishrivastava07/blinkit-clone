@@ -1423,13 +1423,16 @@ function AdminUsers({ auth }) {
   )
 }
 function Account({ auth }) {
+  const navigate = useNavigate()
   const [profile, setProfile] = useState(auth.profile)
   const [addresses, setAddresses] = useState([])
   const [form, setForm] = useState({ name: auth.profile?.name || '', phone: auth.profile?.phone || '' })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [logoutError, setLogoutError] = useState('')
 
   useEffect(() => {
     let active = true
@@ -1494,6 +1497,20 @@ function Account({ auth }) {
     }
   }
 
+  const logout = async () => {
+    setLoggingOut(true)
+    setLogoutError('')
+    try {
+      const { error: signOutError } = await supabase.auth.signOut()
+      if (signOutError) fail(signOutError)
+      navigate('/login', { replace: true })
+    } catch (signOutError) {
+      setLogoutError(signOutError.message)
+    } finally {
+      setLoggingOut(false)
+    }
+  }
+
   return (
     <Shell auth={auth}>
       <main className="account-page">
@@ -1552,6 +1569,16 @@ function Account({ auth }) {
               </article>
             ))}
           </div>
+        </section>
+        <section className="account-logout-section" aria-label="Account logout">
+          <div>
+            <h2>Finished shopping?</h2>
+            <p>Sign out of your account on this device.</p>
+          </div>
+          <button type="button" className="account-logout-button" onClick={logout} disabled={loggingOut}>
+            {loggingOut ? 'Signing out…' : 'Log out'}
+          </button>
+          {logoutError && <p className="account-logout-error" role="alert">{logoutError}</p>}
         </section>
       </main>
     </Shell>

@@ -54,19 +54,34 @@ the `claim_delivery` RPC. The latest migrations add persistent customer carts,
 atomic delivery claiming, security/index hardening, a 51-product sample catalogue
 with 53 package-size variants, and customer product ratings/reviews. Product details
 are available by selecting a catalogue item; customers can submit or update one
-rating per product. Shopkeepers with owner, manager, or catalog-manager
-membership can create, edit, and archive products, update the first product
-variant and its stock, and upload photos to the public `product-images` bucket.
-Apply all pending migrations with
+rating per product. The Fashion migration adds the Fashion category tree without
+seeding Fashion products, a configurable `storefront_promotions` table, variant
+size/colour attributes, and a seven-image product gallery with shop-owned RLS.
+Shopkeepers with owner, manager, or catalog-manager membership can manage their
+own products and images in the public `product-images` bucket. Apply all pending migrations with
 `npx supabase --workdir src/supabase db push` after linking the intended
 Supabase project. Product photos use individually mapped Pexels images hosted
 remotely rather than bundled locally; if one is unavailable, the catalogue
 shows a neutral "Photo unavailable" state. Product image URLs and the seeded
-product mapping are maintained by the catalogue migrations. See the
+product mapping are maintained by the catalogue migrations. The hero and three
+homepage cards are loaded from `storefront_promotions`; an administrator can
+change their text, image URL, call-to-action, internal target path, position,
+and active status in Supabase without changing the app bundle. See the
 [Pexels license](https://www.pexels.com/license/), which permits use in
 e-commerce websites and apps. Customer-facing inventory stays protected by
 RLS; when stock is not visible, the storefront lets the checkout RPC confirm
 availability and enforce the stock limit.
+
+The current-location action requests browser geolocation only after a customer
+clicks it and sends coordinates to the free, public OpenStreetMap Nominatim
+reverse-geocoding endpoint. The app does not save coordinates; customers must
+confirm or edit the returned address and six-digit PIN before it is saved to
+their private address account. If Nominatim returns no Indian PIN code, the
+customer must enter one manually. No API key is required. The public Nominatim
+service has a usage policy and rate limits; for higher-volume production use,
+operate a compliant proxy or self-host a geocoder. See the
+[Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/)
+and [OpenStreetMap attribution guidance](https://www.openstreetmap.org/copyright).
 
 `place_order` performs server-side product price and stock validation while
 locking inventory. Payments are currently cash-on-delivery only. Razorpay,

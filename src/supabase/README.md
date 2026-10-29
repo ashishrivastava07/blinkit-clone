@@ -13,8 +13,8 @@ Only the publishable key belongs in Vite. Never add a service-role key, database
 
 ## Apply and verify
 
-1. Create/link a Supabase project: `npx supabase login`, then `npx supabase --workdir src/supabase link --project-ref <project-ref>`.
-2. Push schema and seed data: `npx supabase --workdir src/supabase db push`.
+1. Create/link a Supabase project: `npx supabase login`, then `npx supabase --workdir src link --project-ref <project-ref>`.
+2. Push schema and seed data: `npx supabase --workdir src db push`.
 3. In the dashboard, create the first administrator using a trusted server/dashboard operation: add a `user_roles` row with `role = 'admin'` only after the user exists in `auth.users`. Roles are never derived from editable user metadata.
 4. Configure a real Supabase Auth SMS provider before enabling phone login in the UI.
 
@@ -31,6 +31,31 @@ editing `storefront_promotions` rows in the Supabase dashboard. Keep exactly one
 active `hero` row and up to three active `card` rows. `target_path` must be an
 internal route beginning with one `/`. The migration inserts editable starter
 promotions; these are page content, not product inventory.
+
+Apply `20261029230000_public_catalog_verified_reviews_quantity_offers.sql`
+after the storefront migration. It grants anonymous users read access only to
+active products from active, approved shops and their public catalogue content;
+inventory, carts, accounts, and order data remain private. It also exposes only
+verified review content to anonymous users, keeps review writes authenticated
+and limited to delivered purchases, and replaces the checkout RPC with one that
+calculates the quantity discount on the server.
+
+Shopkeepers can configure optional 2+ and 4+ percentage discounts in the
+product editor. The 4+ rate must be greater than the 2+ rate when both are set.
+These discounts are stored on variants, displayed in catalogue/cart prices, and
+calculated again by `place_order` at checkout. Existing reviews are marked as
+verified only when they match a delivered order item; other historical reviews
+are retained but hidden from public ratings.
+
+Fashion products support editable size/colour combinations and a configurable
+size chart (chest, waist, hip and length in centimetres). Adding options to an
+existing product creates only missing variants and preserves existing variant
+stock and inventory. The size chart is stored on the product row.
+
+Delivery-agent order lists use the `available_delivery_orders` and
+`my_delivery_orders` RPCs. The agent sees the order reference and delivery
+address, but cannot select orders or order items directly through PostgREST.
+Finishing a delivery sets the agent back to available status.
 
 The `product-images` bucket and its shop-membership Storage policies are defined
 by the existing shopkeeper product management migration. The new image paths use

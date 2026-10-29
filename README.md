@@ -59,7 +59,7 @@ seeding Fashion products, a configurable `storefront_promotions` table, variant
 size/colour attributes, and a seven-image product gallery with shop-owned RLS.
 Shopkeepers with owner, manager, or catalog-manager membership can manage their
 own products and images in the public `product-images` bucket. Apply all pending migrations with
-`npx supabase --workdir src/supabase db push` after linking the intended
+`npx supabase --workdir src db push` after linking the intended
 Supabase project. Product photos use individually mapped Pexels images hosted
 remotely rather than bundled locally; if one is unavailable, the catalogue
 shows a neutral "Photo unavailable" state. Product image URLs and the seeded
@@ -72,14 +72,25 @@ e-commerce websites and apps. Customer-facing inventory stays protected by
 RLS; when stock is not visible, the storefront lets the checkout RPC confirm
 availability and enforce the stock limit.
 
-The current-location action requests browser geolocation only after a customer
-clicks it and sends coordinates to the free, public OpenStreetMap Nominatim
-reverse-geocoding endpoint. The app does not save coordinates; customers must
-confirm or edit the returned address and six-digit PIN before it is saved to
-their private address account. If Nominatim returns no Indian PIN code, the
-customer must enter one manually. No API key is required. The public Nominatim
-service has a usage policy and rate limits; for higher-volume production use,
-operate a compliant proxy or self-host a geocoder. See the
+The public storefront, purchase-verified reviews, variant quantity discounts,
+and Fashion size charts are added by
+`20261029230000_public_catalog_verified_reviews_quantity_offers.sql`. Apply this
+pending migration before deployment; authenticated products remain browsable
+without it through the app's legacy-column fallback, but anonymous reads and
+the new review/discount/size-chart database features require the migration.
+Delivery agents receive order/address details through scoped RPCs only; they do
+not receive order-item product data. Completing delivery returns the agent to
+available status for the next order.
+
+The location chooser supports a user-initiated high-accuracy GPS lookup and a
+submitted address search using the free, public OpenStreetMap Nominatim service.
+GPS coordinates are sent to Nominatim for the lookup and are not saved by this
+app. The returned full mapped address is a nearby geocoder result, not a
+guarantee of rooftop accuracy; customers should verify it and confirm or edit
+the address and six-digit PIN. If Nominatim does not return an Indian PIN code,
+the customer must enter one manually. No API key is required. Nominatim has a
+usage policy and rate limits; for higher-volume production use, operate a
+compliant proxy or self-host a geocoder. See the
 [Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/)
 and [OpenStreetMap attribution guidance](https://www.openstreetmap.org/copyright).
 

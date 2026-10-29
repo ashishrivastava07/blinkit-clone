@@ -76,9 +76,127 @@
 }
 
 .delivery-location-panel {
-  left: 0;
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 62;
+  width: min(626px, calc(100vw - 32px));
+  max-height: min(80vh, 680px);
+  overflow: auto;
+  padding: 28px 30px;
+  transform: translate(-50%, -50%);
   display: grid;
   gap: 10px;
+}
+
+.location-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 61;
+  background: rgb(0 0 0 / 48%);
+}
+
+.location-modal-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.location-modal-heading h2 {
+  margin: 0;
+  color: #242a24;
+  font-size: 19px;
+}
+
+.location-modal-close {
+  width: 36px;
+  min-height: 36px !important;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #222;
+  font-size: 25px;
+}
+
+.location-search-row {
+  display: grid;
+  grid-template-columns: auto 40px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+}
+
+.location-search-row .location-detect-button {
+  min-height: 46px;
+  padding: 0 15px;
+  background: #138b2e;
+  white-space: nowrap;
+}
+
+.location-or {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid #dfe4df;
+  border-radius: 50%;
+  color: #6b736b;
+  font-size: 12px;
+}
+
+.location-search-form {
+  display: flex;
+  min-width: 0;
+  min-height: 48px;
+  border: 1px solid #cfd5cf;
+  border-radius: 13px;
+  background: #fff;
+}
+
+.location-search-form input {
+  width: 100%;
+  min-width: 0;
+  padding: 0 12px;
+  border: 0;
+  border-radius: inherit;
+  outline: 0;
+  font: inherit;
+}
+
+.location-search-form button {
+  min-width: 42px;
+  min-height: 44px;
+  padding: 0;
+  background: transparent;
+  color: #273127;
+  font-size: 24px;
+}
+
+.location-search-results {
+  display: grid;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid #e6e9e6;
+  border-radius: 8px;
+}
+
+.location-search-results button {
+  min-height: 44px;
+  padding: 9px 12px;
+  border-radius: 0;
+  background: #fff;
+  color: #303830;
+  text-align: left;
+}
+
+.location-search-results button + button {
+  border-top: 1px solid #edf0ed;
+}
+
+.location-accuracy {
+  color: #626b62;
+  line-height: 1.4;
 }
 
 .delivery-location-panel p {
@@ -117,6 +235,77 @@
 .delivery-location-panel .location-message {
   padding-top: 5px;
   line-height: 1.45;
+}
+
+.quantity-offer {
+  color: #167a36;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.product-card .quantity-offer {
+  display: block;
+  margin: 4px 0;
+}
+
+.shop-size-chart {
+  display: grid;
+  grid-column: 1 / -1;
+  gap: 12px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #e1e8e1;
+  border-radius: 10px;
+}
+
+.shop-size-chart legend {
+  padding: 0 6px;
+  font-weight: 750;
+}
+
+.shop-size-chart-rows {
+  display: grid;
+  gap: 10px;
+}
+
+.shop-size-chart-row {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(70px, 1fr)) auto;
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.shop-size-chart-row label {
+  min-width: 0;
+}
+
+.shop-size-chart-row input {
+  width: 100%;
+  min-width: 0;
+}
+
+.size-chart-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.size-chart-table {
+  width: 100%;
+  min-width: 430px;
+  border-collapse: collapse;
+}
+
+.size-chart-table th,
+.size-chart-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid #e8ede8;
+  text-align: left;
+}
+
+.size-chart-table th {
+  color: #313a31;
+  font-size: 13px;
 }
 
 .location-address-form {
@@ -616,12 +805,20 @@
 
   .delivery-location-panel {
     position: fixed;
-    top: 100px;
-    left: 12px;
-    max-height: calc(100vh - 112px);
-    max-height: calc(100dvh - 112px);
-    overflow-y: auto;
+    top: 50%;
+    left: 50%;
+    max-height: 86dvh;
+    padding: 22px 18px;
     overscroll-behavior: contain;
+  }
+
+  .location-search-row {
+    grid-template-columns: 1fr;
+    justify-items: stretch;
+  }
+
+  .location-or {
+    justify-self: center;
   }
 
   .header-search {
@@ -746,6 +943,10 @@
   }
 
   .product-upload-previews {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .shop-size-chart-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

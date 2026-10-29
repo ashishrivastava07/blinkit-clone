@@ -10,6 +10,27 @@ const money = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR
 const categoryFallbackImage = 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=480&q=80'
 const deliveryLocationStorageKey = 'delivery-location:v1'
 const fail = (error) => { throw new Error(error?.message || 'Unable to complete that request.') }
+const isMissingQuantityDiscountColumns = error =>
+  /quantity_discount_(?:2|4).*does not exist|column .*quantity_discount_(?:2|4)/i.test(error?.message || '')
+
+function quantityUnitPrice(variant, quantity) {
+  const basePrice = Number(variant?.discount_price ?? variant?.price ?? 0)
+  const discount4 = variant?.quantity_discount_4
+  const discount2 = variant?.quantity_discount_2
+  const quantityDiscount = quantity >= 4 && discount4 != null
+    ? Number(discount4)
+    : quantity >= 2 && discount2 != null
+      ? Number(discount2)
+      : 0
+  return Math.round(basePrice * (1 - quantityDiscount / 100) * 100) / 100
+}
+
+function quantityOfferLabel(variant) {
+  const offers = []
+  if (Number(variant?.quantity_discount_2) > 0) offers.push(`Buy 2+ · ${variant.quantity_discount_2}% off`)
+  if (Number(variant?.quantity_discount_4) > 0) offers.push(`Buy 4+ · ${variant.quantity_discount_4}% off`)
+  return offers.join(' · ')
+}
 
 function readConfirmedDeliveryLocation() {
   try {
@@ -21,11 +42,12 @@ function readConfirmedDeliveryLocation() {
     const city = typeof address?.city === 'string' ? address.city.trim() : ''
     const state = typeof address?.state === 'string' ? address.state.trim() : ''
     const postalCode = typeof address?.postal_code === 'string' ? address.postal_code.trim() : ''
+    const formattedAddress = typeof address?.formatted_address === 'string' ? address.formatted_address.trim() : ''
     const id = typeof address?.id === 'string' ? address.id : ''
     const label = typeof address?.label === 'string' ? address.label.trim() : 'Delivery'
     if (!addressLine || addressLine.length > 300 || !city || city.length > 120
       || state.length > 120 || (postalCode && !/^\d{6}$/.test(postalCode))
-      || id.length > 200 || label.length > 120) {
+      || id.length > 200 || label.length > 120 || formattedAddress.length > 500) {
       localStorage.removeItem(deliveryLocationStorageKey)
       return null
     }
@@ -36,7 +58,7 @@ function readConfirmedDeliveryLocation() {
       city,
       state,
       postal_code: postalCode,
-      formatted_address: formatDeliveryLocation({ address_line: addressLine, city, state, postal_code: postalCode }),
+      formatted_address: formattedAddress || formatDeliveryLocation({ address_line: addressLine, city, state, postal_code: postalCode }),
     }
   } catch {
     try {
@@ -56,6 +78,7 @@ function persistConfirmedDeliveryLocation(address) {
     city: address.city.trim(),
     state: address.state?.trim() || '',
     postal_code: address.postal_code?.trim() || '',
+    formatted_address: address.formatted_address?.trim() || '',
   }
   localStorage.setItem(deliveryLocationStorageKey, JSON.stringify({ version: 1, address: savedAddress }))
   if (savedAddress.id) localStorage.setItem('delivery-address-id', savedAddress.id)
@@ -63,7 +86,38 @@ function persistConfirmedDeliveryLocation(address) {
   window.dispatchEvent(new Event('deliveryLocationUpdated'))
   return {
     ...savedAddress,
-    formatted_address: formatDeliveryLocation(savedAddress),
+    formatted_address: savedAddress.formatted_address || formatDeliveryLocation(savedAddress),
+  }
+}
+
+function geocodedLocation(result) {
+  const address = result.address || {}
+  const city = address.city || address.town || address.village || address.municipality
+    || address.county || address.state_district || ''
+  const road = [address.house_number, address.road].filter(Boolean).join(' ')
+  const localityParts = [
+    road,
+    address.neighbourhood,
+    address.suburb,
+    address.quarter,
+    address.city_district,
+    address.village,
+    address.town,
+  ].filter(Boolean)
+  const addressLine = [...new Set(localityParts.filter(part => part.toLowerCase() !== city.toLowerCase()))].join(', ')
+    || result.display_name?.split(',').slice(0, 3).join(',').trim()
+    || city
+  const isIndia = address.country_code?.toLowerCase() === 'in'
+  const postalCode = isIndia && /^\d{6}$/.test(address.postcode || '') ? address.postcode : ''
+  const location = {
+    address_line: addressLine,
+    city,
+    state: address.state || '',
+    postal_code: postalCode,
+  }
+  return {
+    ...location,
+    formatted_address: result.display_name || formatDeliveryLocation(location),
   }
 }
 
@@ -203,7 +257,7 @@ function CustomerHeader({ auth, logout, loggingOut }) {
   const [query, setQuery] = useState('')
   const navigate = useNavigate()
   const accountMenu = useRef(null)
-  const { cartCount, cartError } = useCartActions(auth.user.id)
+  const { cartCount, cartError } = useCartActions(auth.user?.id)
   const closeAccountMenu = () => {
     if (accountMenu.current) accountMenu.current.open = false
   }
@@ -216,7 +270,7 @@ function CustomerHeader({ auth, logout, loggingOut }) {
   return (
     <header className="customer-header">
       <Link className="customer-logo" to="/" aria-label="Blinkit home">blink<span>it</span></Link>
-      <LocationSelector userId={auth.user.id} />
+      <LocationSelector userId={auth.user?.id} />
       <form className="header-search" role="search" onSubmit={search}>
         <span aria-hidden="true">⌕</span>
         <input aria-label="Search products" value={query} onChange={event => setQuery(event.target.value)} placeholder={'Search "bread"'} />
@@ -225,15 +279,24 @@ function CustomerHeader({ auth, logout, loggingOut }) {
       <details className="account-menu" ref={accountMenu}>
         <summary><span>Account</span><span aria-hidden="true">▾</span></summary>
         <div className="account-menu-panel">
-          <span className="account-menu-user">{auth.profile?.name || auth.user?.email}</span>
-          <Link to="/account" onClick={closeAccountMenu}>My account</Link>
-          <Link to="/account/addresses" onClick={closeAccountMenu}>Saved addresses</Link>
-          <Link to="/orders" onClick={closeAccountMenu}>My orders</Link>
-          <button type="button" onClick={() => { closeAccountMenu(); logout() }} disabled={loggingOut}>{loggingOut ? 'Logging out…' : 'Log out'}</button>
+          {auth.user ? (
+            <>
+              <span className="account-menu-user">{auth.profile?.name || auth.user.email}</span>
+              <Link to="/account" onClick={closeAccountMenu}>My account</Link>
+              <Link to="/account/addresses" onClick={closeAccountMenu}>Saved addresses</Link>
+              <Link to="/orders" onClick={closeAccountMenu}>My orders</Link>
+              <button type="button" onClick={() => { closeAccountMenu(); logout() }} disabled={loggingOut}>{loggingOut ? 'Logging out…' : 'Log out'}</button>
+            </>
+          ) : (
+            <>
+              <Link to="/login" onClick={closeAccountMenu}>Sign in</Link>
+              <Link to="/register" onClick={closeAccountMenu}>Create account</Link>
+            </>
+          )}
         </div>
       </details>
-      <Link className="header-cart" to="/cart" aria-label={`Cart, ${cartCount} items`}>
-        <span aria-hidden="true">🛒</span><span>Cart</span><b>{cartCount}</b>
+      <Link className="header-cart" to={auth.user ? '/cart' : '/login'} aria-label={auth.user ? `Cart, ${cartCount} items` : 'Sign in to use your cart'}>
+        <span aria-hidden="true">🛒</span><span>Cart</span>{auth.user && <b>{cartCount}</b>}
       </Link>
       {cartError && <span className="header-cart-error" role="status">Cart count unavailable</span>}
     </header>
@@ -249,7 +312,11 @@ function LocationSelector({ userId }) {
   const [locating, setLocating] = useState(false)
   const [savingAddress, setSavingAddress] = useState(false)
   const [showAddressForm, setShowAddressForm] = useState(false)
-  const [locationDraft, setLocationDraft] = useState({ address_line: '', city: '', state: '', postal_code: '' })
+  const [locationDraft, setLocationDraft] = useState({ address_line: '', city: '', state: '', postal_code: '', formatted_address: '' })
+  const [locationSearch, setLocationSearch] = useState('')
+  const [searchResults, setSearchResults] = useState([])
+  const [searching, setSearching] = useState(false)
+  const [locationAccuracy, setLocationAccuracy] = useState('')
 
   useEffect(() => {
     const restoreLocation = () => {
@@ -263,6 +330,10 @@ function LocationSelector({ userId }) {
 
   useEffect(() => {
     let active = true
+    if (!userId) {
+      setAddresses([])
+      return () => { active = false }
+    }
     supabase.from('addresses')
       .select('id,label,address_line,city,state,postal_code,is_default')
       .eq('user_id', userId)
@@ -277,7 +348,10 @@ function LocationSelector({ userId }) {
           if (preferredAddress) {
             setSelectedId(preferredAddress.id)
             try {
-              setPersistedLocation(persistConfirmedDeliveryLocation(preferredAddress))
+              const savedLocation = preferredAddress.id === persistedLocation?.id
+                ? { ...preferredAddress, formatted_address: persistedLocation.formatted_address }
+                : preferredAddress
+              setPersistedLocation(persistConfirmedDeliveryLocation(savedLocation))
             } catch (storageError) {
               setLocationMessage(`Address loaded, but could not persist it on this device: ${storageError.message}`)
             }
@@ -293,7 +367,14 @@ function LocationSelector({ userId }) {
   const selectedAddress = addresses.find(address => address.id === selectedId)
   const detectedAddressLabel = [locationDraft.address_line, locationDraft.city].filter(Boolean).join(', ')
   const hasLocationDraft = Boolean(detectedAddressLabel || locationDraft.postal_code)
-  const confirmedLocation = selectedAddress || persistedLocation
+  const confirmedLocation = selectedAddress
+    ? {
+      ...selectedAddress,
+      formatted_address: selectedAddress.id === persistedLocation?.id
+        ? persistedLocation.formatted_address
+        : undefined,
+    }
+    : persistedLocation
   const headerLocation = showAddressForm && hasLocationDraft
     ? `${detectedAddressLabel || 'Detected location'} · PIN ${locationDraft.postal_code || 'enter manually'}`
     : confirmedLocation
@@ -302,7 +383,8 @@ function LocationSelector({ userId }) {
   const detectLocation = async () => {
     setLocationMessage('')
     setLocationStatus('')
-    setLocationDraft({ address_line: '', city: '', state: '', postal_code: '' })
+    setLocationDraft({ address_line: '', city: '', state: '', postal_code: '', formatted_address: '' })
+    setSearchResults([])
     if (!navigator.geolocation) {
       setLocationMessage('Location detection is not supported by this browser. Choose or add an address instead.')
       setShowAddressForm(true)
@@ -313,12 +395,13 @@ function LocationSelector({ userId }) {
     try {
       const position = await new Promise((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(resolve, reject, {
-          enableHighAccuracy: false,
-          maximumAge: 60_000,
-          timeout: 12_000,
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 20_000,
         })
       })
-      setLocationStatus('Looking up your locality and PIN code…')
+      setLocationAccuracy(`GPS reported accuracy: about ${Math.max(1, Math.round(position.coords.accuracy))} m. Verify the address before confirming.`)
+      setLocationStatus('Looking up the nearest available street address…')
 
       const controller = new AbortController()
       const timeoutId = window.setTimeout(() => controller.abort(), 10_000)
@@ -330,6 +413,7 @@ function LocationSelector({ userId }) {
           lon: String(position.coords.longitude),
           zoom: '18',
           addressdetails: '1',
+          'accept-language': 'en',
         })
         response = await fetch(`https://nominatim.openstreetmap.org/reverse?${parameters}`, {
           headers: { Accept: 'application/json' },
@@ -340,30 +424,13 @@ function LocationSelector({ userId }) {
       }
       if (!response.ok) throw new Error(`Address lookup failed (HTTP ${response.status}).`)
 
-      const result = await response.json()
-      const address = result.address || {}
-      const locality = address.neighbourhood || address.suburb || address.village || address.town
-        || address.city_district || address.city || address.county || ''
-      const city = address.city || address.town || address.village || address.municipality
-        || address.county || address.state_district || ''
-      const road = [address.house_number, address.road].filter(Boolean).join(' ')
-      const addressLine = road || locality || city
-      const isIndia = address.country_code?.toLowerCase() === 'in'
-      const postalCode = isIndia && /^\d{6}$/.test(address.postcode || '') ? address.postcode : ''
-
-      setLocationDraft({
-        address_line: addressLine,
-        city: city || locality,
-        state: address.state || '',
-        postal_code: postalCode,
-      })
+      const location = geocodedLocation(await response.json())
+      setLocationDraft(location)
       setShowAddressForm(true)
       localStorage.setItem('delivery-location-pending-address', 'true')
-      setLocationMessage(postalCode
-        ? `Found ${[locality || city, city && city !== locality ? city : '', postalCode].filter(Boolean).join(', ')}. Confirm or edit the address and PIN code before saving.`
-        : isIndia
-          ? 'The address lookup did not return a six-digit PIN code. Enter it manually, then confirm or edit the address.'
-          : 'A verified Indian address and PIN code were not returned. Enter the delivery address and six-digit PIN manually.')
+      setLocationMessage(location.postal_code
+        ? 'Review the full street address and PIN below. Reverse geocoding returns the nearest mapped address, not a guarantee of rooftop accuracy.'
+        : 'No six-digit Indian PIN code was returned. Enter it manually and review the street address before confirming.')
     } catch (error) {
       const message = error?.name === 'AbortError'
         ? 'Address lookup timed out. Enter the delivery address and PIN code manually.'
@@ -380,6 +447,49 @@ function LocationSelector({ userId }) {
       setLocating(false)
       setLocationStatus('')
     }
+  }
+
+  const searchDeliveryLocation = async event => {
+      event.preventDefault()
+      const query = locationSearch.trim()
+      if (query.length < 3) {
+        setLocationMessage('Enter at least three characters to search for a delivery location.')
+        return
+      }
+      setSearching(true)
+      setLocationMessage('')
+      setSearchResults([])
+      try {
+        const parameters = new URLSearchParams({
+          format: 'jsonv2',
+          addressdetails: '1',
+          countrycodes: 'in',
+          limit: '5',
+          'accept-language': 'en',
+          q: query,
+        })
+        const controller = new AbortController()
+        const timeoutId = window.setTimeout(() => controller.abort(), 10_000)
+        let response
+        try {
+          response = await fetch(`https://nominatim.openstreetmap.org/search?${parameters}`, {
+            headers: { Accept: 'application/json' },
+            signal: controller.signal,
+          })
+        } finally {
+          window.clearTimeout(timeoutId)
+        }
+        if (!response.ok) throw new Error(`Address lookup failed (HTTP ${response.status}).`)
+        const results = await response.json()
+        setSearchResults(results.map(result => ({ ...geocodedLocation(result), resultId: result.place_id })))
+        if (!results.length) setLocationMessage('No matching Indian locations were found. Try a street, area, landmark or PIN code.')
+      } catch (error) {
+        setLocationMessage(error.name === 'AbortError'
+          ? 'Location search timed out. Try again or enter the delivery address manually.'
+          : `Unable to search delivery locations: ${error.message}`)
+      } finally {
+        setSearching(false)
+      }
   }
 
   const chooseAddress = event => {
@@ -403,8 +513,9 @@ function LocationSelector({ userId }) {
       localStorage.removeItem('delivery-address-id')
       setLocationMessage('')
     }
-    setLocationDraft({ address_line: '', city: '', state: '', postal_code: '' })
+    setLocationDraft({ address_line: '', city: '', state: '', postal_code: '', formatted_address: '' })
     setShowAddressForm(false)
+    event.currentTarget.closest('details').open = false
   }
 
   const saveDetectedAddress = async event => {
@@ -418,17 +529,32 @@ function LocationSelector({ userId }) {
       return
     }
 
-    setSavingAddress(true)
     setLocationMessage('')
     try {
+      const confirmedAddress = {
+        label: 'Delivery',
+        address_line: locationDraft.address_line.trim(),
+        city: locationDraft.city.trim(),
+        state: locationDraft.state.trim(),
+        postal_code: locationDraft.postal_code,
+        formatted_address: locationDraft.formatted_address,
+      }
+      if (!userId) {
+        setPersistedLocation(persistConfirmedDeliveryLocation(confirmedAddress))
+        setSelectedId('')
+        setShowAddressForm(false)
+        setLocationMessage('Delivery location confirmed on this device.')
+        return
+      }
+      setSavingAddress(true)
       const { data, error } = await supabase.from('addresses')
         .insert({
           user_id: userId,
-          label: 'Delivery',
-          address_line: locationDraft.address_line.trim(),
-          city: locationDraft.city.trim(),
-          state: locationDraft.state.trim() || null,
-          postal_code: locationDraft.postal_code,
+          label: confirmedAddress.label,
+          address_line: confirmedAddress.address_line,
+          city: confirmedAddress.city,
+          state: confirmedAddress.state || null,
+          postal_code: confirmedAddress.postal_code,
           is_default: addresses.length === 0,
         })
         .select('id,label,address_line,city,state,postal_code,is_default')
@@ -439,7 +565,10 @@ function LocationSelector({ userId }) {
       localStorage.removeItem('delivery-location-pending-address')
       let saveMessage = 'Delivery address saved and selected.'
       try {
-        setPersistedLocation(persistConfirmedDeliveryLocation(data))
+        setPersistedLocation(persistConfirmedDeliveryLocation({
+          ...data,
+          formatted_address: confirmedAddress.formatted_address,
+        }))
       } catch (storageError) {
         saveMessage = `Address saved and selected, but could not persist it on this device: ${storageError.message}`
       }
@@ -455,12 +584,18 @@ function LocationSelector({ userId }) {
   return (
     <details className="delivery-location">
       <summary>
-        <span className="delivery-location-label">Delivery in 13 minutes</span>
+        <span className="delivery-location-label">Delivery location</span>
         <span className="delivery-location-address">{headerLocation} <span aria-hidden="true">▾</span></span>
       </summary>
-      <div className="delivery-location-panel">
-        <strong>Choose a delivery location</strong>
-        <p>Choose a saved address or detect and confirm your location. Coordinates are sent to OpenStreetMap for this lookup and are not saved by this app.</p>
+      <div className="location-modal-backdrop" onClick={event => {
+        if (event.target === event.currentTarget) event.currentTarget.closest('details').open = false
+      }}>
+      <section className="delivery-location-panel" role="dialog" aria-modal="true" aria-labelledby="change-location-title">
+        <div className="location-modal-heading">
+          <h2 id="change-location-title">Change Location</h2>
+          <button type="button" className="location-modal-close" aria-label="Close location chooser" onClick={event => { event.currentTarget.closest('details').open = false }}>×</button>
+        </div>
+        <p>Detect your current position or search an Indian delivery location. Review the returned address before confirming.</p>
         {(addresses.length > 0 || persistedLocation?.id) && (
           <label htmlFor="saved-delivery-address">Saved address</label>
         )}
@@ -473,29 +608,50 @@ function LocationSelector({ userId }) {
             {addresses.map(address => <option key={address.id} value={address.id}>{address.label}: {address.address_line}, {address.city}{address.postal_code ? ` · PIN ${address.postal_code}` : ''}</option>)}
           </select>
         )}
-        <button type="button" onClick={detectLocation} disabled={locating}>
-          {locating ? 'Looking up address…' : 'Use my current location'}
-        </button>
-        <button type="button" className="manual-address-toggle" onClick={() => setShowAddressForm(value => !value)}>
-          {showAddressForm ? 'Hide address form' : 'Enter address and PIN manually'}
-        </button>
+        <div className="location-search-row">
+          <button type="button" className="location-detect-button" onClick={detectLocation} disabled={locating}>
+            {locating ? 'Detecting…' : 'Detect my location'}
+          </button>
+          <span className="location-or">OR</span>
+          <form className="location-search-form" onSubmit={searchDeliveryLocation}>
+            <input aria-label="Search delivery location" value={locationSearch} onChange={event => setLocationSearch(event.target.value)} placeholder="Search delivery location" />
+            <button type="submit" disabled={searching} aria-label="Search">{searching ? '…' : '⌕'}</button>
+          </form>
+        </div>
+        {searchResults.length > 0 && (
+          <div className="location-search-results" aria-label="Location search results">
+            {searchResults.map(result => (
+              <button key={result.resultId} type="button" onClick={() => {
+                setLocationDraft(result)
+                setSearchResults([])
+                setShowAddressForm(true)
+                setLocationAccuracy('')
+                setLocationMessage('Review and confirm this mapped address. Edit any field that is not accurate.')
+              }}>{result.formatted_address}</button>
+            ))}
+          </div>
+        )}
+        {!showAddressForm && <button type="button" className="manual-address-toggle" onClick={() => setShowAddressForm(true)}>Enter address and PIN manually</button>}
         {showAddressForm && (
           <form className="location-address-form" onSubmit={saveDetectedAddress}>
-            <label htmlFor="location-address-line">Address / locality</label>
-            <input id="location-address-line" autoComplete="street-address" maxLength="300" required value={locationDraft.address_line} onChange={event => setLocationDraft(current => ({ ...current, address_line: event.target.value }))} />
+            <label htmlFor="location-address-line">Street, building and locality</label>
+            <input id="location-address-line" autoComplete="street-address" maxLength="300" required value={locationDraft.address_line} onChange={event => setLocationDraft(current => ({ ...current, address_line: event.target.value, formatted_address: '' }))} />
             <label htmlFor="location-city">City</label>
-            <input id="location-city" autoComplete="address-level2" maxLength="120" required value={locationDraft.city} onChange={event => setLocationDraft(current => ({ ...current, city: event.target.value }))} />
+            <input id="location-city" autoComplete="address-level2" maxLength="120" required value={locationDraft.city} onChange={event => setLocationDraft(current => ({ ...current, city: event.target.value, formatted_address: '' }))} />
             <label htmlFor="location-state">State (optional)</label>
-            <input id="location-state" autoComplete="address-level1" maxLength="120" value={locationDraft.state} onChange={event => setLocationDraft(current => ({ ...current, state: event.target.value }))} />
+            <input id="location-state" autoComplete="address-level1" maxLength="120" value={locationDraft.state} onChange={event => setLocationDraft(current => ({ ...current, state: event.target.value, formatted_address: '' }))} />
             <label htmlFor="location-pincode">Indian PIN code</label>
-            <input id="location-pincode" autoComplete="postal-code" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" required value={locationDraft.postal_code} placeholder="6-digit PIN" onChange={event => setLocationDraft(current => ({ ...current, postal_code: event.target.value.replace(/\D/g, '').slice(0, 6) }))} />
-            <button type="submit" disabled={savingAddress}>{savingAddress ? 'Saving address…' : 'Confirm and save address'}</button>
+            <input id="location-pincode" autoComplete="postal-code" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" required value={locationDraft.postal_code} placeholder="6-digit PIN" onChange={event => setLocationDraft(current => ({ ...current, postal_code: event.target.value.replace(/\D/g, '').slice(0, 6), formatted_address: '' }))} />
+            {locationAccuracy && <small className="location-accuracy">{locationAccuracy}</small>}
+            <button type="submit" disabled={savingAddress}>{savingAddress ? 'Saving address…' : 'Confirm delivery location'}</button>
+            <button type="button" className="manual-address-toggle" onClick={() => setShowAddressForm(false)}>Back to location search</button>
           </form>
         )}
-        <Link to="/account/addresses">Add or manage addresses</Link>
+        {userId && <Link to="/account/addresses">Add or manage addresses</Link>}
         {locationStatus && <p className="location-message" role="status">{locationStatus}</p>}
         {locationMessage && <p className="location-message" role="status">{locationMessage}</p>}
         <small className="geocoding-attribution">Address lookup by OpenStreetMap contributors.</small>
+      </section>
       </div>
     </details>
   )
@@ -566,18 +722,28 @@ function AuthPage({ register = false }) {
   )
 }
 
-function useCatalogue(query = '', category = '') {
+function useCatalogue(query = '', category = '', userId = '') {
   const [state, setState] = useState({ loading: true, data: [], error: '' })
   useEffect(() => {
     let mounted = true
     ;(async () => {
       try {
         requireDb()
-        const { data, error } = await supabase
+        const catalogueBase = 'id,name,description,brand,image_url,shop_id,categories(id,name,slug,image_url,parent_id),product_variants(id,name,sku,price,discount_price'
+        const catalogueSelect = `${catalogueBase},quantity_discount_2,quantity_discount_4,attributes`
+        let { data, error } = await supabase
           .from('products')
-          .select('id,name,description,brand,image_url,shop_id,categories(id,name,slug,image_url,parent_id),product_variants(id,name,sku,price,discount_price,attributes,inventory(stock_quantity,reserved_quantity))')
+          .select(`${catalogueSelect}${userId ? ',inventory(stock_quantity,reserved_quantity)' : ''})`)
           .eq('is_active', true)
           .order('name')
+        if (error && isMissingQuantityDiscountColumns(error)) {
+          const fallback = await supabase.from('products')
+            .select(`${catalogueBase},attributes${userId ? ',inventory(stock_quantity,reserved_quantity)' : ''})`)
+            .eq('is_active', true)
+            .order('name')
+          data = fallback.data
+          error = fallback.error
+        }
         if (error) fail(error)
         if (mounted) setState({ loading: false, data: data || [], error: '' })
       } catch (err) {
@@ -585,7 +751,7 @@ function useCatalogue(query = '', category = '') {
       }
     })()
     return () => { mounted = false }
-  }, [])
+  }, [userId])
 
   const normalizedQuery = query.trim().toLowerCase()
   const data = state.data.filter(product => {
@@ -658,6 +824,11 @@ function useCartActions(userId) {
 
   useEffect(() => {
     let active = true
+    if (!userId) {
+      setCartCount(0)
+      setCartError('')
+      return () => { active = false }
+    }
     const refresh = async () => {
       const { data, error } = await supabase.from('carts').select('cart_items(quantity)').eq('user_id', userId).maybeSingle()
       if (error) throw error
@@ -676,6 +847,10 @@ function useCartActions(userId) {
   }, [userId])
 
   const add = async (product, variant) => {
+    if (!userId) {
+      setCartError('Sign in to add items to your cart.')
+      return
+    }
     setCartError('')
     try {
       const { data: cart, error: cartError } = await supabase
@@ -708,7 +883,8 @@ function useCartActions(userId) {
 
   return { cartCount, cartError, add }
 }
-function ProductCard({ product, onAdd }) {
+function ProductCard({ product, onAdd, authenticated }) {
+  const navigate = useNavigate()
   const [imageFailed, setImageFailed] = useState(false)
   const variant = product.product_variants?.[0]
   const available = variant?.inventory?.[0]
@@ -732,11 +908,12 @@ function ProductCard({ product, onAdd }) {
         <small>{product.categories?.name || 'Essentials'}{product.brand ? ` · ${product.brand}` : ''}</small>
         <h3>{product.name}</h3>
         <p>{variant?.name || 'Unavailable'} · {stock === null ? 'Availability confirmed at checkout' : stock > 0 ? 'In stock' : 'Out of stock'}</p>
+        {quantityOfferLabel(variant) && <small className="quantity-offer">{quantityOfferLabel(variant)}</small>}
       </Link>
       <div>
         <b>{price != null ? money.format(price) : '—'}</b>
         {variant?.discount_price != null && variant.price > price && <del>{money.format(variant.price)}</del>}
-        <button disabled={!variant || stock === 0} onClick={() => onAdd(product, variant)}>{stock === 0 ? 'OUT' : 'ADD'}</button>
+        <button disabled={!variant || stock === 0} onClick={() => authenticated ? onAdd(product, variant) : navigate('/login')}>{authenticated ? (stock === 0 ? 'OUT' : 'ADD') : 'SIGN IN'}</button>
       </div>
     </article>
   )
@@ -755,12 +932,14 @@ function ProductDetail({ auth }) {
   const [reviewText, setReviewText] = useState('')
   const [loading, setLoading] = useState(true)
   const [reviewsLoading, setReviewsLoading] = useState(true)
+  const [reviewEligibilityLoading, setReviewEligibilityLoading] = useState(true)
+  const [canReview, setCanReview] = useState(false)
   const [reviewsAvailable, setReviewsAvailable] = useState(true)
   const [reviewError, setReviewError] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
-  const { cartCount, cartError, add } = useCartActions(auth.user.id)
+  const { cartCount, cartError, add } = useCartActions(auth.user?.id)
   const navigate = useNavigate()
 
   useEffect(() => {
@@ -772,16 +951,29 @@ function ProductDetail({ auth }) {
     setReviewText('')
     setReviewsLoading(true)
     setReviewsAvailable(true)
+    setReviewEligibilityLoading(true)
+    setCanReview(false)
     setError('')
     setReviewError('')
 
     const loadProduct = async () => {
       try {
-        const { data: loadedProduct, error: productError } = await supabase.from('products')
-          .select('id,name,description,brand,image_url,shop_id,categories(name,slug),product_images(id,image_url,storage_path,position,is_primary),product_variants(id,name,sku,price,discount_price,attributes,inventory(stock_quantity,reserved_quantity))')
+        const detailBase = 'id,name,description,brand,image_url,size_chart,shop_id,categories(name,slug),product_images(id,image_url,storage_path,position,is_primary),product_variants(id,name,sku,price,discount_price'
+        const detailSelect = `${detailBase},quantity_discount_2,quantity_discount_4,attributes`
+        let { data: loadedProduct, error: productError } = await supabase.from('products')
+          .select(`${detailSelect}${auth.user?.id ? ',inventory(stock_quantity,reserved_quantity)' : ''})`)
           .eq('id', id)
           .eq('is_active', true)
           .maybeSingle()
+        if (productError && isMissingQuantityDiscountColumns(productError)) {
+          const fallback = await supabase.from('products')
+            .select(`${detailBase},attributes${auth.user?.id ? ',inventory(stock_quantity,reserved_quantity)' : ''})`)
+            .eq('id', id)
+            .eq('is_active', true)
+            .maybeSingle()
+          loadedProduct = fallback.data
+          productError = fallback.error
+        }
         if (productError) fail(productError)
         if (!active) return
 
@@ -793,7 +985,7 @@ function ProductDetail({ auth }) {
         let reviewResult
         try {
           reviewResult = await supabase.from('product_reviews')
-            .select('user_id,rating,review_text,created_at')
+            .select(`${auth.user?.id ? 'user_id,' : ''}rating,review_text,created_at`)
             .eq('product_id', id)
             .order('created_at', { ascending: false })
         } catch (reviewsLoadError) {
@@ -811,23 +1003,32 @@ function ProductDetail({ auth }) {
         }
 
         const productReviews = reviewResult.data || []
-        const ownReview = productReviews.find(review => review.user_id === auth.user.id)
+        const ownReview = productReviews.find(review => review.user_id === auth.user?.id)
         setReviews(productReviews)
         setRating(ownReview?.rating || 0)
         setReviewText(ownReview?.review_text || '')
+        if (auth.user?.id) {
+          const { data: eligibility, error: eligibilityError } = await supabase.rpc('customer_can_review_product', { p_product_id: id })
+          if (eligibilityError) {
+            setReviewError(eligibilityError.message)
+          } else {
+            setCanReview(Boolean(eligibility))
+          }
+        }
       } catch (loadError) {
         if (active) setError(loadError.message)
       } finally {
         if (active) {
           setLoading(false)
           setReviewsLoading(false)
+          setReviewEligibilityLoading(false)
         }
       }
     }
 
     loadProduct()
     return () => { active = false }
-  }, [id, auth.user.id])
+  }, [id, auth.user?.id])
 
   const selectedVariant = product?.product_variants?.find(variant => variant.id === selectedVariantId)
   const inventory = selectedVariant?.inventory?.[0]
@@ -905,10 +1106,11 @@ function ProductDetail({ auth }) {
               {selectedVariant?.discount_price != null && selectedVariant.price > price && <del>{money.format(selectedVariant.price)}</del>}
               <span>{stock === null ? 'Stock availability will be confirmed at checkout' : stock > 0 ? `${stock} in stock` : 'Currently out of stock'}</span>
             </div>
-            <button disabled={!selectedVariant || stock === 0} onClick={() => add(product, selectedVariant)}>
-              {stock === 0 ? 'Out of stock' : 'Add to cart'}
+            <button disabled={!selectedVariant || stock === 0} onClick={() => auth.user ? add(product, selectedVariant) : navigate('/login')}>
+              {auth.user ? (stock === 0 ? 'Out of stock' : 'Add to cart') : 'Sign in to add to cart'}
             </button>
-            <button className="product-cart-link" onClick={() => navigate('/cart')}>View cart ({cartCount})</button>
+            <button className="product-cart-link" onClick={() => navigate(auth.user ? '/cart' : '/login')}>{auth.user ? `View cart (${cartCount})` : 'Sign in to view cart'}</button>
+            {quantityOfferLabel(selectedVariant) && <p className="quantity-offer">{quantityOfferLabel(selectedVariant)}</p>}
           </div>
         </section>
 
@@ -923,6 +1125,25 @@ function ProductDetail({ auth }) {
             <li><b>Availability</b><span>{stock === null ? 'Confirmed at checkout' : stock > 0 ? 'Available to order' : 'Currently unavailable'}</span></li>
           </ul>
         </section>
+        {!!product.size_chart?.length && (
+          <section className="product-detail-section card">
+            <h2>Size chart (cm)</h2>
+            <div className="size-chart-table-wrap">
+              <table className="size-chart-table">
+                <thead><tr><th>Size</th><th>Chest</th><th>Waist</th><th>Hip</th><th>Length</th></tr></thead>
+                <tbody>{product.size_chart.map((row, index) => (
+                  <tr key={`${row.size}-${index}`}>
+                    <th scope="row">{row.size}</th>
+                    <td>{row.chest || '—'}</td>
+                    <td>{row.waist || '—'}</td>
+                    <td>{row.hip || '—'}</td>
+                    <td>{row.length || '—'}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            </div>
+          </section>
+        )}
 
         <section className="product-detail-section card">
           <h2>Ratings & reviews</h2>
@@ -931,7 +1152,7 @@ function ProductDetail({ auth }) {
               <div className="review-summary">
                 {reviewsLoading ? <p>Loading ratings and reviews…</p> : reviews.length ? <><RatingStars rating={averageRating} label={`${averageRating.toFixed(1)} out of 5 stars`} /><strong>{averageRating.toFixed(1)} / 5</strong><span>Based on {reviews.length} {reviews.length === 1 ? 'rating' : 'ratings'}</span></> : <p>No reviews yet. Be the first to share your experience.</p>}
               </div>
-              {!reviewsLoading && (
+              {!reviewsLoading && auth.user && canReview && (
                 <form className="review-form" onSubmit={submitReview}>
                   <h3>{reviews.some(review => review.user_id === auth.user.id) ? 'Update your rating' : 'Rate this product'}</h3>
                   <div className="rating-input" role="radiogroup" aria-label="Your rating">
@@ -953,15 +1174,20 @@ function ProductDetail({ auth }) {
                   {notice && <p className="review-notice">{notice}</p>}
                 </form>
               )}
+              {!reviewsLoading && !auth.user && <p>Sign in and purchase this product to leave a review. <Link to="/login">Sign in</Link></p>}
+              {!reviewsLoading && auth.user && !reviewEligibilityLoading && !canReview && (
+                <p className="review-unavailable">Reviews are available only after this product has been delivered on your account.</p>
+              )}
             </>
           ) : (
             <p className="review-unavailable">Ratings and reviews are not available yet. Product details are still available.</p>
           )}
           {reviewError && <p className="review-unavailable" role="status">Review service response: {reviewError}</p>}
           <div className="product-reviews">
-            {reviews.filter(review => review.review_text).map(review => (
-              <article key={review.user_id}>
+            {reviews.filter(review => review.review_text).map((review, index) => (
+              <article key={review.user_id || `${review.created_at}-${index}`}>
                 <RatingStars rating={review.rating} label={`${review.rating} out of 5 stars`} />
+                <small>Verified purchase</small>
                 <time dateTime={review.created_at}>{new Date(review.created_at).toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' })}</time>
                 <p>{review.review_text}</p>
               </article>
@@ -1019,10 +1245,10 @@ function ProductDetailImage({ product }) {
 }
 
 function CustomerHome({ auth }) {
-  const { loading, data, error } = useCatalogue()
+  const { loading, data, error } = useCatalogue('', '', auth.user?.id)
   const { categories, error: categoryError } = useCategories()
   const { promotions, loading: promotionsLoading, error: promotionsError } = usePromotions()
-  const { cartCount, cartError, add } = useCartActions(auth.user.id)
+  const { cartCount, cartError, add } = useCartActions(auth.user?.id)
   const [category, setCategory] = useState('')
   const navigate = useNavigate()
   const rootCategories = categories.filter(item => !item.parent_id)
@@ -1109,11 +1335,11 @@ function CustomerHome({ auth }) {
         <Message error={error || cartError} />
         {loading ? <Loading /> : (
           <div className="products">
-            {visibleProducts.map(item => <ProductCard key={item.id} product={item} onAdd={add} />)}
+            {visibleProducts.map(item => <ProductCard key={item.id} product={item} onAdd={add} authenticated={Boolean(auth.user)} />)}
           </div>
         )}
         {!loading && !error && !visibleProducts.length && <p className="empty">No products in this category yet.</p>}
-        <button className="cart-float" onClick={() => navigate('/cart')}>🛒 {cartCount} in cart</button>
+        <button className="cart-float" onClick={() => navigate(auth.user ? '/cart' : '/login')}>🛒 {auth.user ? `${cartCount} in cart` : 'Sign in to shop'}</button>
       </main>
     </Shell>
   )
@@ -1122,9 +1348,9 @@ function SearchPage({ auth }) {
   const [query, setQuery] = useState(() => new URLSearchParams(window.location.search).get('q') || '')
   const [category, setCategory] = useState('')
   const location = useLocation()
-  const { loading, data, error } = useCatalogue(query, category)
+  const { loading, data, error } = useCatalogue(query, category, auth.user?.id)
   const { categories, error: categoryError } = useCategories()
-  const { cartCount, cartError, add } = useCartActions(auth.user.id)
+  const { cartCount, cartError, add } = useCartActions(auth.user?.id)
   const fashionCategoryId = categories.find(item => item.slug === 'fashion')?.id
   const fashionSubcategories = categories.filter(item => item.parent_id === fashionCategoryId)
   useEffect(() => {
@@ -1158,9 +1384,9 @@ function SearchPage({ auth }) {
           </div>
         )}
         <Message error={error || categoryError || cartError} />
-        {loading ? <Loading /> : <div className="products">{data.map(item => <ProductCard key={item.id} product={item} onAdd={add} />)}</div>}
+        {loading ? <Loading /> : <div className="products">{data.map(item => <ProductCard key={item.id} product={item} onAdd={add} authenticated={Boolean(auth.user)} />)}</div>}
         {!loading && !error && !data.length && <p className="empty">No products match your search.</p>}
-        <Link className="cart-float button" to="/cart">🛒 {cartCount} in cart</Link>
+        <Link className="cart-float button" to={auth.user ? '/cart' : '/login'}>🛒 {auth.user ? `${cartCount} in cart` : 'Sign in to shop'}</Link>
       </main>
     </Shell>
   )
@@ -1172,11 +1398,19 @@ function Cart({ auth }) {
   const navigate = useNavigate()
 
   const load = async () => {
-    const { data, error: getError } = await supabase
+    let { data, error: getError } = await supabase
       .from('carts')
-      .select('id,shop_id,cart_items(id,quantity,product_variants(id,name,price,discount_price,products(name,image_url)))')
+      .select('id,shop_id,cart_items(id,quantity,product_variants(id,name,price,discount_price,quantity_discount_2,quantity_discount_4,products(name,image_url)))')
       .eq('user_id', auth.user.id)
       .maybeSingle()
+    if (getError && isMissingQuantityDiscountColumns(getError)) {
+      const fallback = await supabase.from('carts')
+        .select('id,shop_id,cart_items(id,quantity,product_variants(id,name,price,discount_price,products(name,image_url)))')
+        .eq('user_id', auth.user.id)
+        .maybeSingle()
+      data = fallback.data
+      getError = fallback.error
+    }
     if (getError) setError(getError.message)
     else setCart(data || { cart_items: [] })
   }
@@ -1196,7 +1430,7 @@ function Cart({ auth }) {
 
   if (!cart) return <Shell auth={auth}><Loading /></Shell>
   const total = cart.cart_items.reduce(
-    (sum, item) => sum + (item.product_variants.discount_price ?? item.product_variants.price) * item.quantity,
+    (sum, item) => sum + quantityUnitPrice(item.product_variants, item.quantity) * item.quantity,
     0,
   )
 
@@ -1219,7 +1453,8 @@ function Cart({ auth }) {
                     </div>
                     <div>
                       <b>{product?.name}</b>
-                      <small>{item.product_variants.name} · {money.format(item.product_variants.discount_price ?? item.product_variants.price)}</small>
+                      <small>{item.product_variants.name} · {money.format(quantityUnitPrice(item.product_variants, item.quantity))} each</small>
+                      {quantityOfferLabel(item.product_variants) && <small className="quantity-offer">{quantityOfferLabel(item.product_variants)}</small>}
                     </div>
                     <div className="counter">
                       <button onClick={() => change(item.id, item.quantity - 1)} aria-label={`Remove one ${product?.name}`}>−</button>
@@ -1385,7 +1620,35 @@ function OrderDetail({ auth }) {
   )
 }
 function Status({ status }) { return <span className={`status ${status}`}>{status.replaceAll('_', ' ')}</span> }
-function OrderList({ orders, action }) { return <div className="orders">{orders.map((order) => <article className="card" key={order.id}><div><b>#{order.id.slice(0, 8)}</b><small>{new Date(order.created_at).toLocaleString()}</small></div><Status status={order.order_status} /><p>{order.shop_name ? `${order.shop_name} · ${order.shop_address}` : order.order_items?.map((item) => `${item.product_name_snapshot} × ${item.quantity}`).join(', ')}</p><b>{money.format(order.total_amount)}</b>{action && action(order)}</article>)}{!orders.length && <p className="empty">No orders yet.</p>}</div> }
+function OrderList({ orders, action }) {
+  return (
+    <div className="orders">
+      {orders.map(order => {
+        const hasDeliveryAddress = Boolean(order.address_line)
+        const address = [order.address_line, order.city, order.state, order.postal_code]
+          .filter(Boolean)
+          .join(', ')
+        return (
+          <article className="card" key={order.id}>
+            <div>
+              <b>#{order.id.slice(0, 8)}</b>
+              {!hasDeliveryAddress && <small>{new Date(order.created_at).toLocaleString()}</small>}
+            </div>
+            <Status status={order.order_status} />
+            {hasDeliveryAddress
+              ? <p><b>{order.address_label || 'Deliver to'}:</b> {address}</p>
+              : <p>{order.shop_name
+                ? `${order.shop_name} · ${order.shop_address}`
+                : order.order_items?.map(item => `${item.product_name_snapshot} × ${item.quantity}`).join(', ')}</p>}
+            {!hasDeliveryAddress && <b>{money.format(order.total_amount)}</b>}
+            {action && action(order)}
+          </article>
+        )
+      })}
+      {!orders.length && <p className="empty">No orders yet.</p>}
+    </div>
+  )
+}
 
 function Dashboard({ auth, role }) {
   const location = useLocation()
@@ -1405,11 +1668,13 @@ function Dashboard({ auth, role }) {
     setLoading(true)
     setError('')
     try {
-      const orderRequest = supabase
-        .from('orders')
-        .select('id,order_status,total_amount,created_at,order_items(product_name_snapshot,quantity)', { count: 'exact' })
-        .order('created_at', { ascending: false })
-        .limit(10)
+      const orderRequest = role === 'delivery_agent'
+        ? supabase.rpc('my_delivery_orders')
+        : supabase
+          .from('orders')
+          .select('id,order_status,total_amount,created_at,order_items(product_name_snapshot,quantity)', { count: 'exact' })
+          .order('created_at', { ascending: false })
+          .limit(10)
       const requests = [orderRequest]
       if (role === 'shopkeeper') {
         requests.push(supabase.from('inventory')
@@ -1427,8 +1692,21 @@ function Dashboard({ auth, role }) {
       const results = await Promise.all(requests)
       const failed = results.find(result => result.error)
       if (failed) fail(failed.error)
-      setOrders(results[0].data || [])
-      setOrderCount(results[0].count ?? results[0].data?.length ?? 0)
+      setOrders(role === 'delivery_agent'
+        ? (results[0].data || []).map(delivery => ({
+          id: delivery.order_id,
+          order_status: delivery.order_status,
+          created_at: delivery.created_at,
+          address_label: delivery.address_label,
+          address_line: delivery.address_line,
+          city: delivery.city,
+          state: delivery.state,
+          postal_code: delivery.postal_code,
+        }))
+        : results[0].data || [])
+      setOrderCount(role === 'delivery_agent'
+        ? results[0].data?.length || 0
+        : results[0].count ?? results[0].data?.length ?? 0)
 
       if (role === 'shopkeeper') setInventory(results[1].data || [])
       if (role === 'admin') {
@@ -1461,14 +1739,10 @@ function Dashboard({ auth, role }) {
     setError('')
     try {
       const next = availability === 'available' ? 'offline' : 'available'
-      const { data, error: updateError } = await supabase
-        .from('delivery_agents')
-        .update({ availability_status: next, updated_at: new Date().toISOString() })
-        .eq('user_id', auth.user.id)
-        .select('user_id')
-        .maybeSingle()
+      const { error: updateError } = await supabase.rpc('set_delivery_agent_availability', {
+        p_status: next,
+      })
       if (updateError) setError(updateError.message)
-      else if (!data) setError('This account has no delivery-agent profile yet. Ask an admin to provision it.')
       else await load()
     } catch (updateError) {
       setError(updateError.message)
@@ -1577,10 +1851,23 @@ function ShopProductForm({ shops, categories, product, onCancel, onSave, saving 
     sku: firstVariant?.sku || '',
     price: firstVariant?.price ?? '',
     discount_price: firstVariant?.discount_price ?? '',
+    quantity_discount_2: firstVariant?.quantity_discount_2 ?? '',
+    quantity_discount_4: firstVariant?.quantity_discount_4 ?? '',
     stock: firstVariant?.inventory?.[0]?.stock_quantity ?? 0,
     sizes: [...new Set(product?.product_variants?.map(variant => variant.attributes?.size).filter(Boolean) || [])].join(', '),
     colors: [...new Set(product?.product_variants?.map(variant => variant.attributes?.color).filter(Boolean) || [])].join(', '),
   })
+  const [sizeChartRows, setSizeChartRows] = useState(() => (
+    product?.size_chart?.length
+      ? product.size_chart.map(row => ({
+        size: row.size || '',
+        chest: row.chest || '',
+        waist: row.waist || '',
+        hip: row.hip || '',
+        length: row.length || '',
+      }))
+      : [{ size: '', chest: '', waist: '', hip: '', length: '' }]
+  ))
   const [images, setImages] = useState(() => {
     const savedImages = product?.product_images?.slice()
       .sort((left, right) => left.position - right.position)
@@ -1650,6 +1937,8 @@ function ShopProductForm({ shops, categories, product, onCancel, onSave, saving 
     event.preventDefault()
     const price = Number(form.price)
     const discount = form.discount_price === '' ? null : Number(form.discount_price)
+    const quantityDiscount2 = form.quantity_discount_2 === '' ? null : Number(form.quantity_discount_2)
+    const quantityDiscount4 = form.quantity_discount_4 === '' ? null : Number(form.quantity_discount_4)
     const stock = Number(form.stock)
     if (!Number.isFinite(price) || price < 0 || (discount !== null && (!Number.isFinite(discount) || discount < 0 || discount > price))) {
       setFormError('Enter a valid price and a discount price no greater than the regular price.')
@@ -1659,18 +1948,50 @@ function ShopProductForm({ shops, categories, product, onCancel, onSave, saving 
       setFormError('Stock must be a whole number greater than or equal to zero.')
       return
     }
+    if ([quantityDiscount2, quantityDiscount4].some(value => value !== null && (!Number.isFinite(value) || value <= 0 || value > 100))
+      || (quantityDiscount2 !== null && quantityDiscount4 !== null && quantityDiscount4 <= quantityDiscount2)) {
+      setFormError('Quantity discounts must be from 0.01% to 100%, and the 4+ discount must exceed the 2+ discount.')
+      return
+    }
     if (images.length > 7) {
       setFormError('A product can have up to seven images.')
       return
     }
     const sizes = form.sizes.split(',').map(value => value.trim()).filter(Boolean)
     const colors = form.colors.split(',').map(value => value.trim()).filter(Boolean)
-    if (!product && Math.max(sizes.length, 1) * Math.max(colors.length, 1) > 100) {
+    const proposedOptions = (sizes.length ? sizes : [null]).flatMap(size =>
+      (colors.length ? colors : [null]).map(color => ({ size, color })),
+    )
+    const optionKey = ({ size, color }) => `${(size || '').toLowerCase()}|${(color || '').toLowerCase()}`
+    const existingOptionKeys = new Set((product?.product_variants || [])
+      .filter(variant => variant.attributes?.size || variant.attributes?.color)
+      .map(variant => optionKey({ size: variant.attributes?.size, color: variant.attributes?.color })))
+    const newOptionCount = proposedOptions.filter(option => !existingOptionKeys.has(optionKey(option))).length
+    const productVariantCount = product?.product_variants?.length || 0
+    if (proposedOptions.length > 100 || (product && productVariantCount + newOptionCount > 100)) {
       setFormError('A product can have no more than 100 size and colour combinations.')
       return
     }
+    const sizeChart = sizeChartRows
+      .filter(row => row.size.trim())
+      .map(row => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, value.trim()])))
+    if (sizeChartRows.some(row => Object.values(row).some(value => value.trim()) && !row.size.trim())) {
+      setFormError('Add a size label for each size chart row.')
+      return
+    }
     setFormError('')
-    onSave({ ...form, price, discount_price: discount, stock, images, sizes, colors }, setFormError)
+    onSave({
+      ...form,
+      price,
+      discount_price: discount,
+      quantity_discount_2: quantityDiscount2,
+      quantity_discount_4: quantityDiscount4,
+      stock,
+      images,
+      sizes,
+      colors,
+      size_chart: sizeChart,
+    }, setFormError)
   }
 
   return (
@@ -1703,13 +2024,39 @@ function ShopProductForm({ shops, categories, product, onCancel, onSave, saving 
           <input required={!form.sizes && !form.colors} maxLength="80" placeholder="e.g. 500 g" value={form.variant_name} onChange={event => setForm({ ...form, variant_name: event.target.value })} />
         </label>
         <label>Available sizes
-          <input disabled={Boolean(product)} maxLength="300" placeholder="e.g. S, M, L, XL" value={form.sizes} onChange={event => setForm({ ...form, sizes: event.target.value })} />
-          <small>{product ? 'Existing product options are preserved.' : 'Separate sizes with commas. Each option gets a sellable variant.'}</small>
+          <input maxLength="300" placeholder="e.g. S, M, L, XL" value={form.sizes} onChange={event => setForm({ ...form, sizes: event.target.value })} />
+          <small>{product ? 'Add sizes separated by commas. Existing variants and stock are preserved.' : 'Separate sizes with commas. Each option gets a sellable variant.'}</small>
         </label>
         <label>Available colours
-          <input disabled={Boolean(product)} maxLength="300" placeholder="e.g. Navy, Black" value={form.colors} onChange={event => setForm({ ...form, colors: event.target.value })} />
-          <small>{product ? 'Existing product options are preserved.' : 'Size and colour options become distinct cart variants.'}</small>
+          <input maxLength="300" placeholder="e.g. Navy, Black" value={form.colors} onChange={event => setForm({ ...form, colors: event.target.value })} />
+          <small>{product ? 'Add colours separated by commas. New size/colour combinations become variants.' : 'Size and colour options become distinct cart variants.'}</small>
         </label>
+        {(categories.find(category => category.id === form.category_id)?.slug || '').startsWith('fashion') && (
+          <fieldset className="shop-size-chart">
+            <legend>Fashion size chart (cm)</legend>
+            <div className="shop-size-chart-rows">
+              {sizeChartRows.map((row, index) => (
+                <div className="shop-size-chart-row" key={`size-${index}`}>
+                  {['size', 'chest', 'waist', 'hip', 'length'].map(field => (
+                    <label key={field}>{field === 'size' ? 'Size' : field[0].toUpperCase() + field.slice(1)}
+                      <input
+                        aria-label={`Size chart row ${index + 1} ${field}`}
+                        maxLength={field === 'size' ? 16 : 12}
+                        placeholder={field === 'size' ? 'M' : 'Optional'}
+                        value={row[field]}
+                        onChange={event => setSizeChartRows(current => current.map((item, rowIndex) => (
+                          rowIndex === index ? { ...item, [field]: event.target.value } : item
+                        )))}
+                      />
+                    </label>
+                  ))}
+                  <button type="button" className="ghost" aria-label={`Remove size chart row ${index + 1}`} onClick={() => setSizeChartRows(current => current.filter((_, rowIndex) => rowIndex !== index))}>Remove</button>
+                </div>
+              ))}
+            </div>
+            <button type="button" className="ghost" onClick={() => setSizeChartRows(current => [...current, { size: '', chest: '', waist: '', hip: '', length: '' }])}>Add size row</button>
+          </fieldset>
+        )}
         <label>SKU
           <input maxLength="100" placeholder="Optional; generated if blank" value={form.sku} onChange={event => setForm({ ...form, sku: event.target.value })} />
         </label>
@@ -1718,6 +2065,13 @@ function ShopProductForm({ shops, categories, product, onCancel, onSave, saving 
         </label>
         <label>Discount price (₹)
           <input type="number" min="0" step="0.01" value={form.discount_price} onChange={event => setForm({ ...form, discount_price: event.target.value })} />
+        </label>
+        <label>Extra discount at 2+ items (%)
+          <input type="number" min="0.01" max="100" step="0.01" placeholder="Optional" value={form.quantity_discount_2} onChange={event => setForm({ ...form, quantity_discount_2: event.target.value })} />
+        </label>
+        <label>Extra discount at 4+ items (%)
+          <input type="number" min="0.01" max="100" step="0.01" placeholder="Optional" value={form.quantity_discount_4} onChange={event => setForm({ ...form, quantity_discount_4: event.target.value })} />
+          <small>Applied per item to the current sale price. Set 4+ higher than 2+.</small>
         </label>
         <label>Opening stock
           <input required type="number" min="0" step="1" value={form.stock} onChange={event => setForm({ ...form, stock: event.target.value })} />
@@ -1777,7 +2131,7 @@ function ShopProducts({ auth }) {
       if (adminView) {
         const { data, error: loadError } = await supabase
           .from('products')
-          .select('id,name,brand,is_active,product_variants(id,name,sku,price,discount_price,inventory(id,stock_quantity,low_stock_threshold))')
+          .select('id,name,brand,size_chart,is_active,product_variants(id,name,sku,price,discount_price,quantity_discount_2,quantity_discount_4,inventory(id,stock_quantity,low_stock_threshold))')
           .order('name')
         if (loadError) fail(loadError)
         setRows(data || [])
@@ -1803,7 +2157,7 @@ function ShopProducts({ auth }) {
 
       const { data, error: loadError } = await supabase
         .from('products')
-        .select('id,shop_id,category_id,name,description,brand,image_url,is_active,product_images(id,image_url,storage_path,position,is_primary),product_variants(id,name,sku,price,discount_price,attributes,inventory(id,stock_quantity,low_stock_threshold))')
+        .select('id,shop_id,category_id,name,description,brand,image_url,size_chart,is_active,product_images(id,image_url,storage_path,position,is_primary),product_variants(id,name,sku,price,discount_price,quantity_discount_2,quantity_discount_4,attributes,inventory(id,stock_quantity,low_stock_threshold))')
         .in('shop_id', shopIds)
         .order('name')
       if (loadError) fail(loadError)
@@ -1854,6 +2208,7 @@ function ShopProducts({ auth }) {
         name: form.name.trim(),
         description: form.description.trim() || null,
         brand: form.brand.trim() || null,
+        size_chart: form.size_chart,
       }
       if (editingProduct) {
         const variant = editingProduct.product_variants?.[0]
@@ -1870,6 +2225,51 @@ function ShopProducts({ auth }) {
             .maybeSingle()
           if (variantError) fail(variantError)
           if (!updatedVariant) throw new Error('Product details were saved, but its variant was not updated.')
+          const variantIds = editingProduct.product_variants.map(item => item.id)
+          if (variantIds.length) {
+            const { error: quantityDiscountError } = await supabase.from('product_variants')
+              .update({
+                quantity_discount_2: form.quantity_discount_2,
+                quantity_discount_4: form.quantity_discount_4,
+              })
+              .in('id', variantIds)
+            if (quantityDiscountError) fail(quantityDiscountError)
+          }
+          const options = (form.sizes.length || form.colors.length)
+            ? (form.sizes.length ? form.sizes : [null]).flatMap(size =>
+              (form.colors.length ? form.colors : [null]).map(color => ({ size, color })),
+            )
+            : []
+          const optionKey = ({ size, color }) => `${(size || '').toLowerCase()}|${(color || '').toLowerCase()}`
+          const existingOptions = new Set(editingProduct.product_variants
+            .filter(item => item.attributes?.size || item.attributes?.color)
+            .map(item => optionKey({ size: item.attributes?.size, color: item.attributes?.color })))
+          const addedOptions = options.filter(option => !existingOptions.has(optionKey(option)))
+          if (addedOptions.length) {
+            const addedRows = addedOptions.map((option, index) => ({
+              product_id: editingProduct.id,
+              name: [option.size, option.color].filter(Boolean).join(' · ') || form.variant_name.trim(),
+              sku: `SKU-${editingProduct.id.slice(0, 8).toUpperCase()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}-${index + 1}`,
+              price: form.price,
+              discount_price: form.discount_price,
+              quantity_discount_2: form.quantity_discount_2,
+              quantity_discount_4: form.quantity_discount_4,
+              attributes: option,
+              is_active: true,
+            }))
+            const { data: addedVariants, error: addVariantsError } = await supabase.from('product_variants')
+              .insert(addedRows)
+              .select('id')
+            if (addVariantsError) fail(addVariantsError)
+            const { error: addInventoryError } = await supabase.from('inventory')
+              .insert(addedVariants.map(item => ({
+                shop_id: editingProduct.shop_id,
+                variant_id: item.id,
+                stock_quantity: form.stock,
+                reserved_quantity: 0,
+              })))
+            if (addInventoryError) fail(addInventoryError)
+          }
           const inventory = variant.inventory?.[0]
           if (inventory) {
             const { data: updatedInventory, error: inventoryError } = await supabase.from('inventory')
@@ -1910,6 +2310,8 @@ function ShopProducts({ auth }) {
               : `SKU-${productId.slice(0, 8).toUpperCase()}-${index + 1}`,
             price: form.price,
             discount_price: form.discount_price,
+            quantity_discount_2: form.quantity_discount_2,
+            quantity_discount_4: form.quantity_discount_4,
             attributes: { size, color },
             is_active: true,
           }))
@@ -2154,33 +2556,56 @@ function RoleOrders({ auth, role }) {
   const effectiveRole = adminView ? 'admin' : role
   const [orders, setOrders] = useState([])
   const [error, setError] = useState('')
+  const [availabilityNotice, setAvailabilityNotice] = useState('')
   const [loading, setLoading] = useState(true)
   const [busyOrderId, setBusyOrderId] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
+    setAvailabilityNotice('')
     try {
       if (availableView) {
+        const { data: agent, error: agentError } = await supabase.from('delivery_agents')
+          .select('availability_status')
+          .eq('user_id', auth.user.id)
+          .maybeSingle()
+        if (agentError) fail(agentError)
+        if (agent?.availability_status !== 'available') {
+          setOrders([])
+          setAvailabilityNotice('You will see available orders when your delivery status is set to available.')
+          return
+        }
         const { data, error: loadError } = await supabase.rpc('available_delivery_orders')
         if (loadError) fail(loadError)
         setOrders((data || []).map(task => ({
           id: task.order_id,
-          order_status: 'ready_for_pickup',
-          total_amount: task.total_amount,
+          order_status: task.order_status,
           created_at: task.created_at,
-          order_items: [],
-          shop_name: task.shop_name,
-          shop_address: task.shop_address,
+          address_label: task.address_label,
+          address_line: task.address_line,
+          city: task.city,
+          state: task.state,
+          postal_code: task.postal_code,
+        })))
+      } else if (effectiveRole === 'delivery_agent') {
+        const { data, error: loadError } = await supabase.rpc('my_delivery_orders')
+        if (loadError) fail(loadError)
+        setOrders((data || []).map(delivery => ({
+          id: delivery.order_id,
+          order_status: delivery.order_status,
+          created_at: delivery.created_at,
+          address_label: delivery.address_label,
+          address_line: delivery.address_line,
+          city: delivery.city,
+          state: delivery.state,
+          postal_code: delivery.postal_code,
         })))
       } else {
         let query = supabase
           .from('orders')
           .select('id,order_status,total_amount,created_at,order_items(product_name_snapshot,quantity)')
           .order('created_at', { ascending: false })
-        if (effectiveRole === 'delivery_agent') {
-          query = query.in('order_status', ['assigned', 'picked_up', 'out_for_delivery', 'delivered'])
-        }
         const { data, error: loadError } = await query
         if (loadError) fail(loadError)
         setOrders(data || [])
@@ -2242,6 +2667,7 @@ function RoleOrders({ auth, role }) {
           <button className="ghost" onClick={load} disabled={loading}>{loading ? 'Refreshing…' : 'Refresh orders'}</button>
         </div>
         <Message error={error} />
+        {availabilityNotice && <p className="dashboard-note">{availabilityNotice}</p>}
         {loading ? <Loading /> : <OrderList orders={orders} action={action} busyOrderId={busyOrderId} />}
       </main>
     </Shell>
@@ -2470,10 +2896,10 @@ function AppRoutes() {
       <Route path="/login" element={<AuthPage />} />
       <Route path="/register" element={<AuthPage register />} />
       <Route path="/unauthorized" element={<main className="empty"><h1>Unauthorized</h1><Link to="/">Go home</Link></main>} />
-      <Route path="/" element={<Guard auth={auth}><CustomerHome auth={auth} /></Guard>} />
-      <Route path="/shop" element={<Guard auth={auth}><CustomerHome auth={auth} /></Guard>} />
-      <Route path="/search" element={<Guard auth={auth}><SearchPage auth={auth} /></Guard>} />
-      <Route path="/products/:id" element={<Guard auth={auth}><ProductDetail auth={auth} /></Guard>} />
+      <Route path="/" element={<CustomerHome auth={auth} />} />
+      <Route path="/shop" element={<CustomerHome auth={auth} />} />
+      <Route path="/search" element={<SearchPage auth={auth} />} />
+      <Route path="/products/:id" element={<ProductDetail auth={auth} />} />
       <Route path="/cart" element={<Guard auth={auth}><Cart auth={auth} /></Guard>} />
       <Route path="/checkout" element={<Guard auth={auth}><Checkout auth={auth} /></Guard>} />
       <Route path="/orders" element={<Guard auth={auth}><CustomerOrders auth={auth} /></Guard>} />

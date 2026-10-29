@@ -57,6 +57,19 @@ Delivery-agent order lists use the `available_delivery_orders` and
 address, but cannot select orders or order items directly through PostgREST.
 Finishing a delivery sets the agent back to available status.
 
+Apply `20261029234700_delivery_multi_order_map_pins.sql` after the storefront
+migration. It allows agents with an active delivery to view and accept additional
+ready orders, keeps the agent busy while any assigned delivery is unfinished,
+and returns the agent to available after the final active delivery is completed.
+It also adds optional latitude/longitude columns to private customer addresses.
+Apply `20261029235000_strict_address_coordinate_pair.sql` immediately after it
+to enforce that a saved map pin contains both coordinates or neither.
+The map picker saves a pin only when the user confirms the address; assigned
+delivery agents can open that confirmed point in Google Maps without a Maps API
+key. The selectable map itself uses OpenStreetMap tiles via Leaflet and includes
+required attribution. Public OpenStreetMap tile/geocoding services have usage
+limits and are not an SLA-backed production map service.
+
 The `product-images` bucket and its shop-membership Storage policies are defined
 by the existing shopkeeper product management migration. The new image paths use
 `<shop-id>/<product-id>/<filename>` so the existing shop-scoped storage rules

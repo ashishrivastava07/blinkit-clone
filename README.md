@@ -79,24 +79,30 @@ pending migration before deployment; authenticated products remain browsable
 without it through the app's legacy-column fallback, but anonymous reads and
 the new review/discount/size-chart database features require the migration.
 Delivery agents receive order/address details through scoped RPCs only; they do
-not receive order-item product data. Completing delivery returns the agent to
-available status for the next order.
+not receive order-item product data. After applying
+`20261029234700_delivery_multi_order_map_pins.sql` and
+`20261029235000_strict_address_coordinate_pair.sql`, agents can accept
+additional ready orders while busy, remain busy until all assigned deliveries
+are complete, and return to available after the final delivery.
 
 The location chooser supports a user-initiated high-accuracy GPS lookup and a
-submitted address search using the free, public OpenStreetMap Nominatim service.
-GPS coordinates are sent to Nominatim for the lookup and are not saved by this
-app. The returned full mapped address is a nearby geocoder result, not a
-guarantee of rooftop accuracy; customers should verify it and confirm or edit
-the address and six-digit PIN. If Nominatim does not return an Indian PIN code,
-the customer must enter one manually. No API key is required. Nominatim has a
-usage policy and rate limits; for higher-volume production use, operate a
-compliant proxy or self-host a geocoder. See the
+submitted address search, plus a Leaflet map using OpenStreetMap tiles where
+customers can click or drag a pin to their delivery point. The selected
+coordinates are stored only after the customer confirms the address; GPS and
+reverse-geocoding results are not saved before confirmation. Reverse geocoding
+provides a mapped address, not a guarantee of rooftop accuracy. Customers
+should verify or edit the street address and six-digit PIN. If Nominatim does
+not return an Indian PIN code, the customer must enter it manually. No map or
+geocoding API key is required; assigned agents can open a saved pin in Google
+Maps using a regular map URL. Nominatim and public OpenStreetMap tiles have
+usage policies and rate limits; for higher-volume production use, operate a
+compliant proxy or self-host a map/geocoder. See the
 [Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/)
 and [OpenStreetMap attribution guidance](https://www.openstreetmap.org/copyright).
 
 `place_order` performs server-side product price and stock validation while
 locking inventory. Payments are currently cash-on-delivery only. Razorpay,
-email/SMS, and maps are not configured and are deliberately not simulated.
+and email/SMS are not configured and are deliberately not simulated.
 
 ## Verify
 

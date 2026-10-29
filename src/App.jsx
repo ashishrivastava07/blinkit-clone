@@ -1,6 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { supabase, isSupabaseConfigured } from './lib/supabase'
+import LanguageProvider from './LanguageProvider'
+import { languageOptions, useLanguage } from './language'
 import './App.css'
 import './dashboard.css'
 import './product-catalogue.css'
@@ -9,6 +11,7 @@ import './storefront.css'
 const money = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 })
 const categoryFallbackImage = 'https://images.unsplash.com/photo-1542838132-92c53300491e?auto=format&fit=crop&w=480&q=80'
 const deliveryLocationStorageKey = 'delivery-location:v1'
+const LocationMapPicker = lazy(() => import('./LocationMapPicker.jsx'))
 const fail = (error) => { throw new Error(error?.message || 'Unable to complete that request.') }
 const isMissingQuantityDiscountColumns = error =>
   /quantity_discount_(?:2|4).*does not exist|column .*quantity_discount_(?:2|4)/i.test(error?.message || '')
@@ -45,9 +48,16 @@ function readConfirmedDeliveryLocation() {
     const formattedAddress = typeof address?.formatted_address === 'string' ? address.formatted_address.trim() : ''
     const id = typeof address?.id === 'string' ? address.id : ''
     const label = typeof address?.label === 'string' ? address.label.trim() : 'Delivery'
+    const hasLatitude = address?.latitude !== null && address?.latitude !== undefined
+    const hasLongitude = address?.longitude !== null && address?.longitude !== undefined
+    const latitude = hasLatitude ? Number(address.latitude) : null
+    const longitude = hasLongitude ? Number(address.longitude) : null
     if (!addressLine || addressLine.length > 300 || !city || city.length > 120
       || state.length > 120 || (postalCode && !/^\d{6}$/.test(postalCode))
-      || id.length > 200 || label.length > 120 || formattedAddress.length > 500) {
+      || id.length > 200 || label.length > 120 || formattedAddress.length > 500
+      || hasLatitude !== hasLongitude
+      || (hasLatitude && (!Number.isFinite(latitude) || latitude < -90 || latitude > 90
+        || !Number.isFinite(longitude) || longitude < -180 || longitude > 180))) {
       localStorage.removeItem(deliveryLocationStorageKey)
       return null
     }
@@ -58,6 +68,8 @@ function readConfirmedDeliveryLocation() {
       city,
       state,
       postal_code: postalCode,
+      latitude,
+      longitude,
       formatted_address: formattedAddress || formatDeliveryLocation({ address_line: addressLine, city, state, postal_code: postalCode }),
     }
   } catch {
@@ -71,6 +83,9 @@ function readConfirmedDeliveryLocation() {
 }
 
 function persistConfirmedDeliveryLocation(address) {
+  const hasCoordinates = address.latitude !== null && address.latitude !== undefined
+    && address.longitude !== null && address.longitude !== undefined
+    && Number.isFinite(Number(address.latitude)) && Number.isFinite(Number(address.longitude))
   const savedAddress = {
     id: address.id || '',
     label: address.label || 'Delivery',
@@ -78,6 +93,8 @@ function persistConfirmedDeliveryLocation(address) {
     city: address.city.trim(),
     state: address.state?.trim() || '',
     postal_code: address.postal_code?.trim() || '',
+    latitude: hasCoordinates ? Number(address.latitude) : null,
+    longitude: hasCoordinates ? Number(address.longitude) : null,
     formatted_address: address.formatted_address?.trim() || '',
   }
   localStorage.setItem(deliveryLocationStorageKey, JSON.stringify({ version: 1, address: savedAddress }))
@@ -114,6 +131,8 @@ function geocodedLocation(result) {
     city,
     state: address.state || '',
     postal_code: postalCode,
+    latitude: Number(result.lat),
+    longitude: Number(result.lon),
   }
   return {
     ...location,
@@ -254,6 +273,7 @@ function Shell({ children, auth, kind = 'customer' }) {
 }
 
 function CustomerHeader({ auth, logout, loggingOut }) {
+  const { language, setLanguage, t } = useLanguage()
   const [query, setQuery] = useState('')
   const navigate = useNavigate()
   const accountMenu = useRef(null)
@@ -261,6 +281,23 @@ function CustomerHeader({ auth, logout, loggingOut }) {
   const closeAccountMenu = () => {
     if (accountMenu.current) accountMenu.current.open = false
   }
+
+  useEffect(() => {
+    const closeOnOutsidePointer = event => {
+      if (accountMenu.current && !accountMenu.current.contains(event.target)) {
+        accountMenu.current.open = false
+      }
+    }
+    const closeOnEscape = event => {
+      if (event.key === 'Escape') closeAccountMenu()
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [])
 
   const search = event => {
     event.preventDefault()
@@ -273,30 +310,36 @@ function CustomerHeader({ auth, logout, loggingOut }) {
       <LocationSelector userId={auth.user?.id} />
       <form className="header-search" role="search" onSubmit={search}>
         <span aria-hidden="true">⌕</span>
-        <input aria-label="Search products" value={query} onChange={event => setQuery(event.target.value)} placeholder={'Search "bread"'} />
-        <button type="submit">Search</button>
+        <input aria-label={t('Search products')} value={query} onChange={event => setQuery(event.target.value)} placeholder={t('Search "bread"')} />
+        <button type="submit">{t('Search')}</button>
       </form>
       <details className="account-menu" ref={accountMenu}>
-        <summary><span>Account</span><span aria-hidden="true">▾</span></summary>
+        <summary><span>{t('Account')}</span><span aria-hidden="true">▾</span></summary>
         <div className="account-menu-panel">
+          <label className="account-language-picker">
+            <span>{t('Language')}</span>
+            <select aria-label={t('Language')} value={language} onChange={event => setLanguage(event.target.value)}>
+              {languageOptions.map(option => <option key={option.code} value={option.code}>{option.label}</option>)}
+            </select>
+          </label>
           {auth.user ? (
             <>
               <span className="account-menu-user">{auth.profile?.name || auth.user.email}</span>
-              <Link to="/account" onClick={closeAccountMenu}>My account</Link>
-              <Link to="/account/addresses" onClick={closeAccountMenu}>Saved addresses</Link>
-              <Link to="/orders" onClick={closeAccountMenu}>My orders</Link>
-              <button type="button" onClick={() => { closeAccountMenu(); logout() }} disabled={loggingOut}>{loggingOut ? 'Logging out…' : 'Log out'}</button>
+              <Link to="/account" onClick={closeAccountMenu}>{t('My account')}</Link>
+              <Link to="/account/addresses" onClick={closeAccountMenu}>{t('Saved addresses')}</Link>
+              <Link to="/orders" onClick={closeAccountMenu}>{t('My orders')}</Link>
+              <button type="button" onClick={() => { closeAccountMenu(); logout() }} disabled={loggingOut}>{loggingOut ? 'Logging out…' : t('Log out')}</button>
             </>
           ) : (
             <>
-              <Link to="/login" onClick={closeAccountMenu}>Sign in</Link>
-              <Link to="/register" onClick={closeAccountMenu}>Create account</Link>
+              <Link to="/login" onClick={closeAccountMenu}>{t('Sign in')}</Link>
+              <Link to="/register" onClick={closeAccountMenu}>{t('Create account')}</Link>
             </>
           )}
         </div>
       </details>
-      <Link className="header-cart" to={auth.user ? '/cart' : '/login'} aria-label={auth.user ? `Cart, ${cartCount} items` : 'Sign in to use your cart'}>
-        <span aria-hidden="true">🛒</span><span>Cart</span>{auth.user && <b>{cartCount}</b>}
+      <Link className="header-cart" to={auth.user ? '/cart' : '/login'} aria-label={auth.user ? `${t('Cart')}, ${cartCount} items` : 'Sign in to use your cart'}>
+        <span aria-hidden="true">🛒</span><span>{t('Cart')}</span>{auth.user && <b>{cartCount}</b>}
       </Link>
       {cartError && <span className="header-cart-error" role="status">Cart count unavailable</span>}
     </header>
@@ -304,6 +347,7 @@ function CustomerHeader({ auth, logout, loggingOut }) {
 }
 
 function LocationSelector({ userId }) {
+  const { t } = useLanguage()
   const [addresses, setAddresses] = useState([])
   const [persistedLocation, setPersistedLocation] = useState(readConfirmedDeliveryLocation)
   const [selectedId, setSelectedId] = useState(() => readSelectedAddressId(readConfirmedDeliveryLocation()))
@@ -312,11 +356,19 @@ function LocationSelector({ userId }) {
   const [locating, setLocating] = useState(false)
   const [savingAddress, setSavingAddress] = useState(false)
   const [showAddressForm, setShowAddressForm] = useState(false)
-  const [locationDraft, setLocationDraft] = useState({ address_line: '', city: '', state: '', postal_code: '', formatted_address: '' })
+  const [locationDraft, setLocationDraft] = useState({ address_line: '', city: '', state: '', postal_code: '', formatted_address: '', latitude: null, longitude: null })
   const [locationSearch, setLocationSearch] = useState('')
   const [searchResults, setSearchResults] = useState([])
   const [searching, setSearching] = useState(false)
   const [locationAccuracy, setLocationAccuracy] = useState('')
+  const mapLookupController = useRef(null)
+  const mapLookupDelay = useRef(null)
+
+  useEffect(() => () => {
+    mapLookupController.current?.abort()
+    mapLookupController.current = null
+    window.clearTimeout(mapLookupDelay.current)
+  }, [])
 
   useEffect(() => {
     const restoreLocation = () => {
@@ -335,7 +387,7 @@ function LocationSelector({ userId }) {
       return () => { active = false }
     }
     supabase.from('addresses')
-      .select('id,label,address_line,city,state,postal_code,is_default')
+      .select('id,label,address_line,city,state,postal_code,latitude,longitude,is_default')
       .eq('user_id', userId)
       .order('is_default', { ascending: false })
       .then(({ data, error }) => {
@@ -383,7 +435,7 @@ function LocationSelector({ userId }) {
   const detectLocation = async () => {
     setLocationMessage('')
     setLocationStatus('')
-    setLocationDraft({ address_line: '', city: '', state: '', postal_code: '', formatted_address: '' })
+    setLocationDraft({ address_line: '', city: '', state: '', postal_code: '', formatted_address: '', latitude: null, longitude: null })
     setSearchResults([])
     if (!navigator.geolocation) {
       setLocationMessage('Location detection is not supported by this browser. Choose or add an address instead.')
@@ -424,7 +476,11 @@ function LocationSelector({ userId }) {
       }
       if (!response.ok) throw new Error(`Address lookup failed (HTTP ${response.status}).`)
 
-      const location = geocodedLocation(await response.json())
+      const location = {
+        ...geocodedLocation(await response.json()),
+        latitude: position.coords.latitude,
+        longitude: position.coords.longitude,
+      }
       setLocationDraft(location)
       setShowAddressForm(true)
       localStorage.setItem('delivery-location-pending-address', 'true')
@@ -492,6 +548,74 @@ function LocationSelector({ userId }) {
       }
   }
 
+  const reverseGeocodeMapPoint = async ({ latitude, longitude }) => {
+    mapLookupController.current?.abort()
+    window.clearTimeout(mapLookupDelay.current)
+    const controller = new AbortController()
+    mapLookupController.current = controller
+    setLocationDraft({
+      address_line: '',
+      city: '',
+      state: '',
+      postal_code: '',
+      formatted_address: '',
+      latitude,
+      longitude,
+    })
+    setLocationMessage('')
+    setLocationStatus('Resolving the selected map point…')
+    try {
+      await new Promise((resolve, reject) => {
+        mapLookupDelay.current = window.setTimeout(() => {
+          mapLookupDelay.current = null
+          resolve()
+        }, 1_000)
+        controller.signal.addEventListener('abort', () => {
+          window.clearTimeout(mapLookupDelay.current)
+          mapLookupDelay.current = null
+          reject(new DOMException('Map lookup superseded', 'AbortError'))
+        }, { once: true })
+      })
+      if (mapLookupController.current !== controller) return
+    } catch {
+      return
+    }
+    const timeoutId = window.setTimeout(() => controller.abort(), 10_000)
+    try {
+      const parameters = new URLSearchParams({
+        format: 'jsonv2',
+        lat: String(latitude),
+        lon: String(longitude),
+        zoom: '18',
+        addressdetails: '1',
+        'accept-language': 'en',
+      })
+      const response = await fetch(`https://nominatim.openstreetmap.org/reverse?${parameters}`, {
+        headers: { Accept: 'application/json' },
+        signal: controller.signal,
+      })
+      if (!response.ok) throw new Error(`Address lookup failed (HTTP ${response.status}).`)
+      const result = await response.json()
+      if (mapLookupController.current !== controller) return
+      const location = geocodedLocation(result)
+      setLocationDraft({ ...location, latitude, longitude })
+      setLocationMessage(location.postal_code
+        ? 'Review the mapped address and PIN. The selected map coordinates are saved only after confirmation.'
+        : 'No six-digit PIN was returned for this point. Enter the PIN manually, then confirm the address.')
+    } catch (error) {
+      if (mapLookupController.current !== controller) return
+      setLocationMessage(error.name === 'AbortError'
+        ? 'Map address lookup timed out. Enter the street address and PIN manually.'
+        : `Could not resolve this map point: ${error.message}. Enter the address and PIN manually.`)
+    } finally {
+      window.clearTimeout(timeoutId)
+      if (mapLookupController.current === controller) {
+        mapLookupController.current = null
+        setLocationStatus('')
+      }
+    }
+  }
+
   const chooseAddress = event => {
     const value = event.target.value
     setSelectedId(value)
@@ -513,7 +637,7 @@ function LocationSelector({ userId }) {
       localStorage.removeItem('delivery-address-id')
       setLocationMessage('')
     }
-    setLocationDraft({ address_line: '', city: '', state: '', postal_code: '', formatted_address: '' })
+    setLocationDraft({ address_line: '', city: '', state: '', postal_code: '', formatted_address: '', latitude: null, longitude: null })
     setShowAddressForm(false)
     event.currentTarget.closest('details').open = false
   }
@@ -538,6 +662,8 @@ function LocationSelector({ userId }) {
         state: locationDraft.state.trim(),
         postal_code: locationDraft.postal_code,
         formatted_address: locationDraft.formatted_address,
+        latitude: locationDraft.latitude,
+        longitude: locationDraft.longitude,
       }
       if (!userId) {
         setPersistedLocation(persistConfirmedDeliveryLocation(confirmedAddress))
@@ -555,9 +681,11 @@ function LocationSelector({ userId }) {
           city: confirmedAddress.city,
           state: confirmedAddress.state || null,
           postal_code: confirmedAddress.postal_code,
+          latitude: confirmedAddress.latitude,
+          longitude: confirmedAddress.longitude,
           is_default: addresses.length === 0,
         })
-        .select('id,label,address_line,city,state,postal_code,is_default')
+        .select('id,label,address_line,city,state,postal_code,latitude,longitude,is_default')
         .single()
       if (error) fail(error)
       setAddresses(current => [...current, data])
@@ -584,18 +712,18 @@ function LocationSelector({ userId }) {
   return (
     <details className="delivery-location">
       <summary>
-        <span className="delivery-location-label">Delivery location</span>
-        <span className="delivery-location-address">{headerLocation} <span aria-hidden="true">▾</span></span>
+        <span className="delivery-location-label">{t('Delivery location')}</span>
+        <span className="delivery-location-address">{confirmedLocation ? headerLocation : t('Choose your location')} <span aria-hidden="true">▾</span></span>
       </summary>
       <div className="location-modal-backdrop" onClick={event => {
         if (event.target === event.currentTarget) event.currentTarget.closest('details').open = false
       }}>
       <section className="delivery-location-panel" role="dialog" aria-modal="true" aria-labelledby="change-location-title">
         <div className="location-modal-heading">
-          <h2 id="change-location-title">Change Location</h2>
+          <h2 id="change-location-title">{t('Change Location')}</h2>
           <button type="button" className="location-modal-close" aria-label="Close location chooser" onClick={event => { event.currentTarget.closest('details').open = false }}>×</button>
         </div>
-        <p>Detect your current position or search an Indian delivery location. Review the returned address before confirming.</p>
+        <p>{t('Detect your current position or search an Indian delivery location. Review the returned address before confirming.')}</p>
         {(addresses.length > 0 || persistedLocation?.id) && (
           <label htmlFor="saved-delivery-address">Saved address</label>
         )}
@@ -610,12 +738,12 @@ function LocationSelector({ userId }) {
         )}
         <div className="location-search-row">
           <button type="button" className="location-detect-button" onClick={detectLocation} disabled={locating}>
-            {locating ? 'Detecting…' : 'Detect my location'}
+            {locating ? t('Detecting…') : t('Detect my location')}
           </button>
-          <span className="location-or">OR</span>
+          <span className="location-or">{t('OR')}</span>
           <form className="location-search-form" onSubmit={searchDeliveryLocation}>
-            <input aria-label="Search delivery location" value={locationSearch} onChange={event => setLocationSearch(event.target.value)} placeholder="Search delivery location" />
-            <button type="submit" disabled={searching} aria-label="Search">{searching ? '…' : '⌕'}</button>
+            <input aria-label={t('Search delivery location')} value={locationSearch} onChange={event => setLocationSearch(event.target.value)} placeholder={t('Search delivery location')} />
+            <button type="submit" disabled={searching} aria-label={t('Search')}>{searching ? '…' : '⌕'}</button>
           </form>
         </div>
         {searchResults.length > 0 && (
@@ -631,23 +759,30 @@ function LocationSelector({ userId }) {
             ))}
           </div>
         )}
-        {!showAddressForm && <button type="button" className="manual-address-toggle" onClick={() => setShowAddressForm(true)}>Enter address and PIN manually</button>}
+        {!showAddressForm && <button type="button" className="manual-address-toggle" onClick={() => setShowAddressForm(true)}>{t('Enter address and PIN manually')}</button>}
         {showAddressForm && (
           <form className="location-address-form" onSubmit={saveDetectedAddress}>
-            <label htmlFor="location-address-line">Street, building and locality</label>
+            <Suspense fallback={<div className="location-map-loading" role="status">Loading map…</div>}>
+              <LocationMapPicker
+                latitude={locationDraft.latitude ?? confirmedLocation?.latitude ?? null}
+                longitude={locationDraft.longitude ?? confirmedLocation?.longitude ?? null}
+                onSelect={reverseGeocodeMapPoint}
+              />
+            </Suspense>
+            <label htmlFor="location-address-line">{t('Street, building and locality')}</label>
             <input id="location-address-line" autoComplete="street-address" maxLength="300" required value={locationDraft.address_line} onChange={event => setLocationDraft(current => ({ ...current, address_line: event.target.value, formatted_address: '' }))} />
-            <label htmlFor="location-city">City</label>
+            <label htmlFor="location-city">{t('City')}</label>
             <input id="location-city" autoComplete="address-level2" maxLength="120" required value={locationDraft.city} onChange={event => setLocationDraft(current => ({ ...current, city: event.target.value, formatted_address: '' }))} />
-            <label htmlFor="location-state">State (optional)</label>
+            <label htmlFor="location-state">{t('State (optional)')}</label>
             <input id="location-state" autoComplete="address-level1" maxLength="120" value={locationDraft.state} onChange={event => setLocationDraft(current => ({ ...current, state: event.target.value, formatted_address: '' }))} />
-            <label htmlFor="location-pincode">Indian PIN code</label>
-            <input id="location-pincode" autoComplete="postal-code" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" required value={locationDraft.postal_code} placeholder="6-digit PIN" onChange={event => setLocationDraft(current => ({ ...current, postal_code: event.target.value.replace(/\D/g, '').slice(0, 6), formatted_address: '' }))} />
+            <label htmlFor="location-pincode">{t('Indian PIN code')}</label>
+            <input id="location-pincode" autoComplete="postal-code" inputMode="numeric" pattern="[0-9]{6}" maxLength="6" required value={locationDraft.postal_code} placeholder={t('6-digit PIN')} onChange={event => setLocationDraft(current => ({ ...current, postal_code: event.target.value.replace(/\D/g, '').slice(0, 6), formatted_address: '' }))} />
             {locationAccuracy && <small className="location-accuracy">{locationAccuracy}</small>}
-            <button type="submit" disabled={savingAddress}>{savingAddress ? 'Saving address…' : 'Confirm delivery location'}</button>
-            <button type="button" className="manual-address-toggle" onClick={() => setShowAddressForm(false)}>Back to location search</button>
+            <button type="submit" disabled={savingAddress}>{savingAddress ? t('Saving address…') : t('Confirm delivery location')}</button>
+            <button type="button" className="manual-address-toggle" onClick={() => setShowAddressForm(false)}>{t('Back to location search')}</button>
           </form>
         )}
-        {userId && <Link to="/account/addresses">Add or manage addresses</Link>}
+        {userId && <Link to="/account/addresses">{t('Add or manage addresses')}</Link>}
         {locationStatus && <p className="location-message" role="status">{locationStatus}</p>}
         {locationMessage && <p className="location-message" role="status">{locationMessage}</p>}
         <small className="geocoding-attribution">Address lookup by OpenStreetMap contributors.</small>
@@ -884,6 +1019,7 @@ function useCartActions(userId) {
   return { cartCount, cartError, add }
 }
 function ProductCard({ product, onAdd, authenticated }) {
+  const { t } = useLanguage()
   const navigate = useNavigate()
   const [imageFailed, setImageFailed] = useState(false)
   const variant = product.product_variants?.[0]
@@ -905,15 +1041,15 @@ function ProductCard({ product, onAdd, authenticated }) {
             />
           )}
         </div>
-        <small>{product.categories?.name || 'Essentials'}{product.brand ? ` · ${product.brand}` : ''}</small>
+        <small>{t(product.categories?.name || 'Essentials')}{product.brand ? ` · ${product.brand}` : ''}</small>
         <h3>{product.name}</h3>
-        <p>{variant?.name || 'Unavailable'} · {stock === null ? 'Availability confirmed at checkout' : stock > 0 ? 'In stock' : 'Out of stock'}</p>
+        <p>{variant?.name || t('Unavailable')} · {stock === null ? t('Availability confirmed at checkout') : stock > 0 ? t('In stock') : t('Out of stock')}</p>
         {quantityOfferLabel(variant) && <small className="quantity-offer">{quantityOfferLabel(variant)}</small>}
       </Link>
       <div>
         <b>{price != null ? money.format(price) : '—'}</b>
         {variant?.discount_price != null && variant.price > price && <del>{money.format(variant.price)}</del>}
-        <button disabled={!variant || stock === 0} onClick={() => authenticated ? onAdd(product, variant) : navigate('/login')}>{authenticated ? (stock === 0 ? 'OUT' : 'ADD') : 'SIGN IN'}</button>
+        <button disabled={!variant || stock === 0} onClick={() => authenticated ? onAdd(product, variant) : navigate('/login')}>{authenticated ? (stock === 0 ? t('OUT') : t('ADD')) : t('SIGN IN')}</button>
       </div>
     </article>
   )
@@ -924,6 +1060,7 @@ function RatingStars({ rating, label }) {
 }
 
 function ProductDetail({ auth }) {
+  const { t } = useLanguage()
   const { id } = useParams()
   const [product, setProduct] = useState(null)
   const [reviews, setReviews] = useState([])
@@ -1041,7 +1178,7 @@ function ProductDetail({ auth }) {
   const submitReview = async event => {
     event.preventDefault()
     if (!rating) {
-      setError('Choose a star rating before submitting your review.')
+      setError(t('Choose a star rating before submitting your review.'))
       return
     }
     setBusy(true)
@@ -1063,7 +1200,7 @@ function ProductDetail({ auth }) {
         .order('created_at', { ascending: false })
       if (loadError) fail(loadError)
       setReviews(data || [])
-      setNotice('Your rating has been saved.')
+      setNotice(t('Your rating has been saved.'))
     } catch (saveError) {
       setError(saveError.message)
     } finally {
@@ -1072,13 +1209,13 @@ function ProductDetail({ auth }) {
   }
 
   if (loading) return <Shell auth={auth}><Loading /></Shell>
-  if (error && !product) return <Shell auth={auth}><main className="narrow"><Message error={error} /><Link to="/search">Back to products</Link></main></Shell>
-  if (!product) return <Shell auth={auth}><main className="narrow empty"><h1>Product not found</h1><Link to="/search">Back to products</Link></main></Shell>
+  if (error && !product) return <Shell auth={auth}><main className="narrow"><Message error={error} /><Link to="/search">{t('Back to products')}</Link></main></Shell>
+  if (!product) return <Shell auth={auth}><main className="narrow empty"><h1>{t('Product not found')}</h1><Link to="/search">{t('Back to products')}</Link></main></Shell>
 
   return (
     <Shell auth={auth}>
       <main className="product-detail-page">
-        <Link className="product-back-link" to="/search">← Back to products</Link>
+        <Link className="product-back-link" to="/search">← {t('Back to products')}</Link>
         <Message error={error || cartError} />
         <section className="product-detail card">
           <ProductDetailImage key={product.id} product={product} />
@@ -1086,12 +1223,12 @@ function ProductDetail({ auth }) {
             <p className="eyebrow">{product.categories?.name || 'Essentials'}{product.brand ? ` · ${product.brand}` : ''}</p>
             <h1>{product.name}</h1>
             <div className="product-rating-summary">
-              {reviewsLoading ? <span>Loading ratings…</span> : !reviewsAvailable ? <span>Ratings are not available yet</span> : reviews.length ? <><RatingStars rating={averageRating} label={`${averageRating.toFixed(1)} out of 5 stars`} /><b>{averageRating.toFixed(1)}</b><span>{reviews.length} {reviews.length === 1 ? 'rating' : 'ratings'}</span></> : <span>No ratings yet</span>}
+              {reviewsLoading ? <span>{t('Loading ratings…')}</span> : !reviewsAvailable ? <span>{t('Ratings are not available yet')}</span> : reviews.length ? <><RatingStars rating={averageRating} label={`${averageRating.toFixed(1)} ${t('out of 5 stars')}`} /><b>{averageRating.toFixed(1)}</b><span>{reviews.length} {t(reviews.length === 1 ? 'rating' : 'ratings')}</span></> : <span>{t('No ratings yet')}</span>}
             </div>
-            <p className="product-description">{product.description || 'No description available.'}</p>
+            <p className="product-description">{product.description || t('No description available.')}</p>
             {product.product_variants?.length > 1 && (
               <label className="variant-picker">
-                Size, colour or pack
+                {t('Size, colour or pack')}
                 <select value={selectedVariantId} onChange={event => setSelectedVariantId(event.target.value)}>
                   {product.product_variants.map(variant => (
                     <option key={variant.id} value={variant.id}>
@@ -1104,33 +1241,33 @@ function ProductDetail({ auth }) {
             <div className="product-detail-price">
               <b>{price != null ? money.format(price) : 'Price unavailable'}</b>
               {selectedVariant?.discount_price != null && selectedVariant.price > price && <del>{money.format(selectedVariant.price)}</del>}
-              <span>{stock === null ? 'Stock availability will be confirmed at checkout' : stock > 0 ? `${stock} in stock` : 'Currently out of stock'}</span>
+              <span>{stock === null ? t('Stock availability will be confirmed at checkout') : stock > 0 ? `${stock} ${t('in stock')}` : t('Currently out of stock')}</span>
             </div>
             <button disabled={!selectedVariant || stock === 0} onClick={() => auth.user ? add(product, selectedVariant) : navigate('/login')}>
-              {auth.user ? (stock === 0 ? 'Out of stock' : 'Add to cart') : 'Sign in to add to cart'}
+              {auth.user ? (stock === 0 ? t('Out of stock') : t('Add to cart')) : t('Sign in to add to cart')}
             </button>
-            <button className="product-cart-link" onClick={() => navigate(auth.user ? '/cart' : '/login')}>{auth.user ? `View cart (${cartCount})` : 'Sign in to view cart'}</button>
+            <button className="product-cart-link" onClick={() => navigate(auth.user ? '/cart' : '/login')}>{auth.user ? `${t('View cart')} (${cartCount})` : t('Sign in to view cart')}</button>
             {quantityOfferLabel(selectedVariant) && <p className="quantity-offer">{quantityOfferLabel(selectedVariant)}</p>}
           </div>
         </section>
 
         <section className="product-detail-section card">
-          <h2>Product features</h2>
+          <h2>{t('Product features')}</h2>
           <ul className="product-feature-list">
-            {product.brand && <li><b>Brand</b><span>{product.brand}</span></li>}
-            {product.categories?.name && <li><b>Category</b><span>{product.categories.name}</span></li>}
-            {selectedVariant && <li><b>Pack size</b><span>{selectedVariant.name}</span></li>}
-            {selectedVariant?.attributes?.size && <li><b>Size</b><span>{selectedVariant.attributes.size}</span></li>}
-            {selectedVariant?.attributes?.color && <li><b>Colour</b><span>{selectedVariant.attributes.color}</span></li>}
-            <li><b>Availability</b><span>{stock === null ? 'Confirmed at checkout' : stock > 0 ? 'Available to order' : 'Currently unavailable'}</span></li>
+            {product.brand && <li><b>{t('Brand')}</b><span>{product.brand}</span></li>}
+            {product.categories?.name && <li><b>{t('Category')}</b><span>{t(product.categories.name)}</span></li>}
+            {selectedVariant && <li><b>{t('Pack size')}</b><span>{selectedVariant.name}</span></li>}
+            {selectedVariant?.attributes?.size && <li><b>{t('Size')}</b><span>{selectedVariant.attributes.size}</span></li>}
+            {selectedVariant?.attributes?.color && <li><b>{t('Colour')}</b><span>{selectedVariant.attributes.color}</span></li>}
+            <li><b>{t('Availability')}</b><span>{stock === null ? t('Confirmed at checkout') : stock > 0 ? t('Available to order') : t('Currently unavailable')}</span></li>
           </ul>
         </section>
         {!!product.size_chart?.length && (
           <section className="product-detail-section card">
-            <h2>Size chart (cm)</h2>
+            <h2>{t('Size chart (cm)')}</h2>
             <div className="size-chart-table-wrap">
               <table className="size-chart-table">
-                <thead><tr><th>Size</th><th>Chest</th><th>Waist</th><th>Hip</th><th>Length</th></tr></thead>
+                <thead><tr><th>{t('Size')}</th><th>{t('Chest')}</th><th>{t('Waist')}</th><th>{t('Hip')}</th><th>{t('Length')}</th></tr></thead>
                 <tbody>{product.size_chart.map((row, index) => (
                   <tr key={`${row.size}-${index}`}>
                     <th scope="row">{row.size}</th>
@@ -1146,15 +1283,15 @@ function ProductDetail({ auth }) {
         )}
 
         <section className="product-detail-section card">
-          <h2>Ratings & reviews</h2>
+          <h2>{t('Ratings & reviews')}</h2>
           {reviewsAvailable ? (
             <>
               <div className="review-summary">
-                {reviewsLoading ? <p>Loading ratings and reviews…</p> : reviews.length ? <><RatingStars rating={averageRating} label={`${averageRating.toFixed(1)} out of 5 stars`} /><strong>{averageRating.toFixed(1)} / 5</strong><span>Based on {reviews.length} {reviews.length === 1 ? 'rating' : 'ratings'}</span></> : <p>No reviews yet. Be the first to share your experience.</p>}
+                {reviewsLoading ? <p>{t('Loading ratings and reviews…')}</p> : reviews.length ? <><RatingStars rating={averageRating} label={`${averageRating.toFixed(1)} ${t('out of 5 stars')}`} /><strong>{averageRating.toFixed(1)} / 5</strong><span>{t('Based on')} {reviews.length} {t(reviews.length === 1 ? 'rating' : 'ratings')}</span></> : <p>{t('No reviews yet. Be the first to share your experience.')}</p>}
               </div>
               {!reviewsLoading && auth.user && canReview && (
                 <form className="review-form" onSubmit={submitReview}>
-                  <h3>{reviews.some(review => review.user_id === auth.user.id) ? 'Update your rating' : 'Rate this product'}</h3>
+                  <h3>{reviews.some(review => review.user_id === auth.user.id) ? t('Update your rating') : t('Rate this product')}</h3>
                   <div className="rating-input" role="radiogroup" aria-label="Your rating">
                     {[1, 2, 3, 4, 5].map(value => (
                       <button
@@ -1168,26 +1305,26 @@ function ProductDetail({ auth }) {
                       >★</button>
                     ))}
                   </div>
-                  <label htmlFor="product-review">Review (optional)</label>
+                  <label htmlFor="product-review">{t('Review (optional)')}</label>
                   <textarea id="product-review" maxLength="1000" rows="3" value={reviewText} onChange={event => setReviewText(event.target.value)} />
-                  <button disabled={busy}>{busy ? 'Saving…' : 'Submit rating'}</button>
+                  <button disabled={busy}>{busy ? t('Saving…') : t('Submit rating')}</button>
                   {notice && <p className="review-notice">{notice}</p>}
                 </form>
               )}
-              {!reviewsLoading && !auth.user && <p>Sign in and purchase this product to leave a review. <Link to="/login">Sign in</Link></p>}
+              {!reviewsLoading && !auth.user && <p>{t('Sign in and purchase this product to leave a review.')} <Link to="/login">{t('Sign in')}</Link></p>}
               {!reviewsLoading && auth.user && !reviewEligibilityLoading && !canReview && (
-                <p className="review-unavailable">Reviews are available only after this product has been delivered on your account.</p>
+                <p className="review-unavailable">{t('Reviews are available only after this product has been delivered on your account.')}</p>
               )}
             </>
           ) : (
-            <p className="review-unavailable">Ratings and reviews are not available yet. Product details are still available.</p>
+            <p className="review-unavailable">{t('Ratings and reviews are not available yet. Product details are still available.')}</p>
           )}
           {reviewError && <p className="review-unavailable" role="status">Review service response: {reviewError}</p>}
           <div className="product-reviews">
             {reviews.filter(review => review.review_text).map((review, index) => (
               <article key={review.user_id || `${review.created_at}-${index}`}>
                 <RatingStars rating={review.rating} label={`${review.rating} out of 5 stars`} />
-                <small>Verified purchase</small>
+                <small>{t('Verified purchase')}</small>
                 <time dateTime={review.created_at}>{new Date(review.created_at).toLocaleDateString('en-IN', { year: 'numeric', month: 'short', day: 'numeric' })}</time>
                 <p>{review.review_text}</p>
               </article>
@@ -1245,6 +1382,7 @@ function ProductDetailImage({ product }) {
 }
 
 function CustomerHome({ auth }) {
+  const { t } = useLanguage()
   const { loading, data, error } = useCatalogue('', '', auth.user?.id)
   const { categories, error: categoryError } = useCategories()
   const { promotions, loading: promotionsLoading, error: promotionsError } = usePromotions()
@@ -1293,7 +1431,7 @@ function CustomerHome({ auth }) {
         )}
         <section className="homepage-category-section">
           <div className="heading">
-            <div><h2>Shop by category</h2><p>Everyday essentials, delivered to your door.</p></div>
+            <div><h2>{t('Shop by category')}</h2><p>{t('Everyday essentials, delivered to your door.')}</p></div>
           </div>
           <div className="category-tiles">
             <button
@@ -1302,7 +1440,7 @@ function CustomerHome({ auth }) {
               onClick={() => setCategory('')}
             >
               <span className="category-tile-image"><span className="category-image-fallback" aria-hidden="true">🛍️</span></span>
-              <span>All products</span>
+              <span>{t('All products')}</span>
             </button>
             {rootCategories.map(item => (
               <button
@@ -1315,22 +1453,22 @@ function CustomerHome({ auth }) {
                   <span className="category-image-fallback" aria-hidden="true">🛍️</span>
                   <img src={item.image_url || categoryFallbackImage} alt="" loading="lazy" onError={event => { event.currentTarget.hidden = true }} />
                 </span>
-                <span>{item.name}</span>
+                <span>{t(item.name)}</span>
               </button>
             ))}
           </div>
           {category === 'fashion' && (
             <div className="fashion-subcategories" aria-label="Fashion subcategories">
-              <button className={!fashionSubcategories.some(item => item.slug === category) ? 'active' : ''} type="button" onClick={() => setCategory('fashion')}>All Fashion</button>
+              <button className={!fashionSubcategories.some(item => item.slug === category) ? 'active' : ''} type="button" onClick={() => setCategory('fashion')}>{t('All Fashion')}</button>
               {fashionSubcategories.map(item => (
-                <button key={item.id} type="button" onClick={() => setCategory(item.slug)}>{item.name}</button>
+                <button key={item.id} type="button" onClick={() => setCategory(item.slug)}>{t(item.name)}</button>
               ))}
             </div>
           )}
         </section>
         <div className="heading">
-          <div><h2>{category ? (categories.find(item => item.slug === category)?.name || 'Popular products') : 'Popular products'}</h2><p>{loading ? 'Loading the catalogue…' : `${visibleProducts.length} products from your local shop`}</p></div>
-          <Link to="/search">Search products</Link>
+          <div><h2>{category ? t(categories.find(item => item.slug === category)?.name || 'Popular products') : t('Popular products')}</h2><p>{loading ? t('Loading the catalogue…') : `${visibleProducts.length} ${t('products from your local shop')}`}</p></div>
+          <Link to="/search">{t('Search products')}</Link>
         </div>
         <Message error={error || cartError} />
         {loading ? <Loading /> : (
@@ -1338,13 +1476,14 @@ function CustomerHome({ auth }) {
             {visibleProducts.map(item => <ProductCard key={item.id} product={item} onAdd={add} authenticated={Boolean(auth.user)} />)}
           </div>
         )}
-        {!loading && !error && !visibleProducts.length && <p className="empty">No products in this category yet.</p>}
-        <button className="cart-float" onClick={() => navigate(auth.user ? '/cart' : '/login')}>🛒 {auth.user ? `${cartCount} in cart` : 'Sign in to shop'}</button>
+        {!loading && !error && !visibleProducts.length && <p className="empty">{t('No products in this category yet.')}</p>}
+        <button className="cart-float" onClick={() => navigate(auth.user ? '/cart' : '/login')}>🛒 {auth.user ? `${cartCount} ${t('in cart')}` : t('Sign in to shop')}</button>
       </main>
     </Shell>
   )
 }
 function SearchPage({ auth }) {
+  const { t } = useLanguage()
   const [query, setQuery] = useState(() => new URLSearchParams(window.location.search).get('q') || '')
   const [category, setCategory] = useState('')
   const location = useLocation()
@@ -1360,8 +1499,8 @@ function SearchPage({ auth }) {
     <Shell auth={auth}>
       <main>
         <div className="heading">
-          <div><h1>Search products</h1><p>Browse groceries, fashion and the complete local product catalogue.</p></div>
-          <input value={query} placeholder="Milk, bread, shirts…" onChange={event => setQuery(event.target.value)} />
+          <div><h1>{t('Search products')}</h1><p>{t('Browse groceries, fashion and the complete local product catalogue.')}</p></div>
+          <input aria-label={t('Search products')} value={query} placeholder={t('Milk, bread, shirts…')} onChange={event => setQuery(event.target.value)} />
         </div>
         <div className="catalogue-categories" aria-label="Filter products by category">
           {[{ slug: '', name: 'All products' }, ...categories.filter(item => !item.parent_id)].map(item => (
@@ -1370,7 +1509,7 @@ function SearchPage({ auth }) {
               key={item.id || 'all'}
               onClick={() => setCategory(item.slug)}
             >
-              {item.name}
+              {t(item.name)}
             </button>
           ))}
         </div>
@@ -1378,14 +1517,14 @@ function SearchPage({ auth }) {
           <div className="catalogue-categories" aria-label="Filter fashion products">
             {fashionSubcategories.map(item => (
               <button key={item.id} className={category === item.slug ? 'active' : ''} onClick={() => setCategory(item.slug)}>
-                {item.name}
+                {t(item.name)}
               </button>
             ))}
           </div>
         )}
         <Message error={error || categoryError || cartError} />
         {loading ? <Loading /> : <div className="products">{data.map(item => <ProductCard key={item.id} product={item} onAdd={add} authenticated={Boolean(auth.user)} />)}</div>}
-        {!loading && !error && !data.length && <p className="empty">No products match your search.</p>}
+        {!loading && !error && !data.length && <p className="empty">{t('No products match your search.')}</p>}
         <Link className="cart-float button" to={auth.user ? '/cart' : '/login'}>🛒 {auth.user ? `${cartCount} in cart` : 'Sign in to shop'}</Link>
       </main>
     </Shell>
@@ -1393,6 +1532,7 @@ function SearchPage({ auth }) {
 }
 
 function Cart({ auth }) {
+  const { t } = useLanguage()
   const [cart, setCart] = useState(null)
   const [error, setError] = useState('')
   const navigate = useNavigate()
@@ -1437,10 +1577,10 @@ function Cart({ auth }) {
   return (
     <Shell auth={auth}>
       <main className="narrow">
-        <h1>Your cart</h1>
+        <h1>{t('Your cart')}</h1>
         <Message error={error} />
         {cart.cart_items.length === 0
-          ? <p className="empty">Your cart is empty. <Link to="/shop">Start shopping</Link></p>
+          ? <p className="empty">{t('Your cart is empty.')} <Link to="/shop">{t('Start shopping')}</Link></p>
           : (
             <>
               {cart.cart_items.map(item => {
@@ -1465,11 +1605,11 @@ function Cart({ auth }) {
                 )
               })}
               <section className="checkout">
-                <p>Subtotal <b>{money.format(total)}</b></p>
-                <p>Delivery <b>{total >= 199 ? 'FREE' : money.format(25)}</b></p>
+                <p>{t('Subtotal')} <b>{money.format(total)}</b></p>
+                <p>{t('Delivery')} <b>{total >= 199 ? t('FREE') : money.format(25)}</b></p>
                 <hr />
-                <h3>To pay <b>{money.format(total + (total >= 199 ? 0 : 25))}</b></h3>
-                <button onClick={() => navigate('/checkout')}>Continue to checkout</button>
+                <h3>{t('To pay')} <b>{money.format(total + (total >= 199 ? 0 : 25))}</b></h3>
+                <button onClick={() => navigate('/checkout')}>{t('Continue to checkout')}</button>
               </section>
             </>
           )}
@@ -1478,9 +1618,57 @@ function Cart({ auth }) {
   )
 }
 
-function Addresses({ auth, selectMode = false }) { const [rows, setRows] = useState([]); const [form, setForm] = useState({ label: 'Home', address_line: '', city: '', state: '', postal_code: '', is_default: false }); const [error, setError] = useState(''); const navigate = useNavigate(); const load = async () => { const { data, error: e } = await supabase.from('addresses').select('*').order('is_default', { ascending: false }); if (e) setError(e.message); else setRows(data || []) }; useEffect(() => { load() }, []); const save = async (event) => { event.preventDefault(); const { error: e } = await supabase.from('addresses').insert({ ...form, user_id: auth.user.id }); if (e) setError(e.message); else { setForm({ label: 'Home', address_line: '', city: '', state: '', postal_code: '', is_default: false }); load() } }; return <Shell auth={auth}><main className="two-col"><section><h1>Saved addresses</h1><Message error={error} />{rows.map((row) => <article className="card address" key={row.id}><b>{row.label} {row.is_default && <small>DEFAULT</small>}</b><p>{row.address_line}, {row.city}, {row.state} {row.postal_code}</p><button className="link-button" onClick={async () => { await supabase.from('addresses').delete().eq('id', row.id); load() }}>Delete</button>{selectMode && <button onClick={() => navigate(`/checkout?address=${row.id}`)}>Deliver here</button>}</article>)}</section><form className="card form" onSubmit={save}><h2>Add address</h2>{Object.entries(form).filter(([key]) => key !== 'is_default').map(([key, value]) => <label key={key}>{key.replace('_', ' ')}<input required value={value} onChange={(e) => setForm({ ...form, [key]: e.target.value })} /></label>)}<label><input type="checkbox" checked={form.is_default} onChange={(e) => setForm({ ...form, is_default: e.target.checked })} /> Default address</label><button>Save address</button></form></main></Shell> }
+function Addresses({ auth, selectMode = false }) {
+  const { t } = useLanguage()
+  const [rows, setRows] = useState([])
+  const [form, setForm] = useState({ label: 'Home', address_line: '', city: '', state: '', postal_code: '', is_default: false })
+  const [error, setError] = useState('')
+  const navigate = useNavigate()
+  const load = async () => {
+    const { data, error: loadError } = await supabase.from('addresses').select('*').order('is_default', { ascending: false })
+    if (loadError) setError(loadError.message)
+    else setRows(data || [])
+  }
+  useEffect(() => { load() }, [])
+  const save = async event => {
+    event.preventDefault()
+    const { error: saveError } = await supabase.from('addresses').insert({ ...form, user_id: auth.user.id })
+    if (saveError) setError(saveError.message)
+    else {
+      setForm({ label: 'Home', address_line: '', city: '', state: '', postal_code: '', is_default: false })
+      load()
+    }
+  }
+  return (
+    <Shell auth={auth}>
+      <main className="two-col">
+        <section>
+          <h1>{t('Saved addresses')}</h1>
+          <Message error={error} />
+          {rows.map(row => (
+            <article className="card address" key={row.id}>
+              <b>{t(row.label)} {row.is_default && <small>{t('DEFAULT')}</small>}</b>
+              <p>{row.address_line}, {row.city}, {row.state} {row.postal_code}</p>
+              <button className="link-button" onClick={async () => { await supabase.from('addresses').delete().eq('id', row.id); load() }}>{t('Delete')}</button>
+              {selectMode && <button onClick={() => navigate(`/checkout?address=${row.id}`)}>{t('Deliver here')}</button>}
+            </article>
+          ))}
+        </section>
+        <form className="card form" onSubmit={save}>
+          <h2>{t('Add address')}</h2>
+          {Object.entries(form).filter(([key]) => key !== 'is_default').map(([key, value]) => (
+            <label key={key}>{t(key.replace('_', ' '))}<input required value={value} onChange={event => setForm({ ...form, [key]: event.target.value })} /></label>
+          ))}
+          <label><input type="checkbox" checked={form.is_default} onChange={event => setForm({ ...form, is_default: event.target.checked })} /> {t('Default address')}</label>
+          <button>{t('Save address')}</button>
+        </form>
+      </main>
+    </Shell>
+  )
+}
 
 function Checkout({ auth }) {
+  const { t } = useLanguage()
   const [addresses, setAddresses] = useState([])
   const [cart, setCart] = useState(null)
   const [addressId, setAddressId] = useState('')
@@ -1532,7 +1720,7 @@ function Checkout({ auth }) {
 
   const place = async () => {
     try {
-      if (!addressId || !cart?.cart_items?.length) throw new Error('Choose an address and add items to your cart.')
+      if (!addressId || !cart?.cart_items?.length) throw new Error(t('Choose an address and add items to your cart.'))
       setBusy(true)
       const { data, error: rpcError } = await supabase.rpc('place_order', {
         p_shop_id: cart.shop_id,
@@ -1558,14 +1746,14 @@ function Checkout({ auth }) {
   return (
     <Shell auth={auth}>
       <main className="narrow">
-        <h1>Checkout</h1>
+        <h1>{t('Checkout')}</h1>
         <Message error={error} />
         {!addresses.length
-          ? <p>Add an <Link to="/account/addresses">address</Link> before checkout.</p>
+          ? <p>{t('Add an')} <Link to="/account/addresses">{t('address')}</Link> {t('before checkout.')}</p>
           : (
             <section className="card checkout-addresses">
-              <h2>Delivery address</h2>
-              {locationNeedsAddress && <p className="location-message">Current coordinates are not a postal address. Select a saved address to continue.</p>}
+              <h2>{t('Delivery address')}</h2>
+              {locationNeedsAddress && <p className="location-message">{t('Current coordinates are not a postal address. Select a saved address to continue.')}</p>}
               {addresses.map(address => (
                 <label className="radio" key={address.id}>
                   <input type="radio" checked={addressId === address.id} onChange={() => chooseAddress(address.id)} />
@@ -1575,16 +1763,24 @@ function Checkout({ auth }) {
             </section>
           )}
         <section className="card">
-          <h2>Payment</h2>
-          <p>Cash on delivery is available. Online payments are intentionally not shown until Razorpay test credentials and webhook verification are configured.</p>
+          <h2>{t('Payment')}</h2>
+          <p>{t('Cash on delivery is available. Online payments are intentionally not shown until Razorpay test credentials and webhook verification are configured.')}</p>
         </section>
-        <button disabled={busy} onClick={place}>{busy ? 'Validating stock…' : 'Place cash-on-delivery order'}</button>
+        <button disabled={busy} onClick={place}>{busy ? t('Validating stock…') : t('Place cash-on-delivery order')}</button>
       </main>
     </Shell>
   )
 }
 
-function CustomerOrders({ auth }) { const [orders, setOrders] = useState([]); useEffect(() => { supabase.from('orders').select('id,order_status,total_amount,created_at,order_items(product_name_snapshot,variant_name_snapshot,quantity)').order('created_at', { ascending: false }).then(({ data }) => setOrders(data || [])) }, []); return <Shell auth={auth}><main><h1>My orders</h1><OrderList orders={orders} /></main></Shell> }
+function CustomerOrders({ auth }) {
+  const { t } = useLanguage()
+  const [orders, setOrders] = useState([])
+  useEffect(() => {
+    supabase.from('orders').select('id,order_status,total_amount,created_at,order_items(product_name_snapshot,variant_name_snapshot,quantity)')
+      .order('created_at', { ascending: false }).then(({ data }) => setOrders(data || []))
+  }, [])
+  return <Shell auth={auth}><main><h1>{t('My orders')}</h1><OrderList orders={orders} /></main></Shell>
+}
 function OrderDetail({ auth }) {
   const { id } = useParams()
   const location = useLocation()
@@ -1636,7 +1832,13 @@ function OrderList({ orders, action }) {
             </div>
             <Status status={order.order_status} />
             {hasDeliveryAddress
-              ? <p><b>{order.address_label || 'Deliver to'}:</b> {address}</p>
+              ? <p><b>{order.address_label || 'Deliver to'}:</b> {address}
+                {order.latitude !== null && order.latitude !== undefined
+                  && order.longitude !== null && order.longitude !== undefined
+                  && Number.isFinite(Number(order.latitude)) && Number.isFinite(Number(order.longitude))
+                  ? <> · <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${order.latitude},${order.longitude}`)}`} target="_blank" rel="noreferrer">Open map</a></>
+                  : null}
+              </p>
               : <p>{order.shop_name
                 ? `${order.shop_name} · ${order.shop_address}`
                 : order.order_items?.map(item => `${item.product_name_snapshot} × ${item.quantity}`).join(', ')}</p>}
@@ -1702,6 +1904,8 @@ function Dashboard({ auth, role }) {
           city: delivery.city,
           state: delivery.state,
           postal_code: delivery.postal_code,
+          latitude: delivery.latitude,
+          longitude: delivery.longitude,
         }))
         : results[0].data || [])
       setOrderCount(role === 'delivery_agent'
@@ -1717,7 +1921,7 @@ function Dashboard({ auth, role }) {
       if (role === 'delivery_agent') {
         const status = results[1].data?.availability_status || 'offline'
         setAvailability(status)
-        if (status === 'available') {
+        if (status === 'available' || status === 'busy') {
           const { data, error: taskError } = await supabase.rpc('available_delivery_orders')
           if (taskError) fail(taskError)
           setAvailableTasks(data || [])
@@ -1797,9 +2001,9 @@ function Dashboard({ auth, role }) {
             {role === 'delivery_agent' && (
               <section className="card dashboard-panel">
                 <div className="dashboard-panel-heading">
-                  <div><h2>Delivery availability</h2><p>Set yourself available to see and claim ready orders.</p></div>
+                  <div><h2>Delivery availability</h2><p>Go online to claim ready orders. You can accept more while a delivery is in progress.</p></div>
                   <button onClick={updateAvailability} disabled={updatingAvailability || availability === 'busy' || availability === 'suspended'}>
-                    {updatingAvailability ? 'Updating…' : availability === 'available' ? 'Go offline' : 'Go online'}
+                    {updatingAvailability ? 'Updating…' : availability === 'busy' ? 'On delivery · accepting more' : availability === 'available' ? 'Go offline' : 'Go online'}
                   </button>
                 </div>
                 <p>Current status: <b>{availability.replaceAll('_', ' ')}</b></p>
@@ -2571,7 +2775,7 @@ function RoleOrders({ auth, role }) {
           .eq('user_id', auth.user.id)
           .maybeSingle()
         if (agentError) fail(agentError)
-        if (agent?.availability_status !== 'available') {
+        if (!['available', 'busy'].includes(agent?.availability_status)) {
           setOrders([])
           setAvailabilityNotice('You will see available orders when your delivery status is set to available.')
           return
@@ -2587,6 +2791,8 @@ function RoleOrders({ auth, role }) {
           city: task.city,
           state: task.state,
           postal_code: task.postal_code,
+          latitude: task.latitude,
+          longitude: task.longitude,
         })))
       } else if (effectiveRole === 'delivery_agent') {
         const { data, error: loadError } = await supabase.rpc('my_delivery_orders')
@@ -2600,6 +2806,8 @@ function RoleOrders({ auth, role }) {
           city: delivery.city,
           state: delivery.state,
           postal_code: delivery.postal_code,
+          latitude: delivery.latitude,
+          longitude: delivery.longitude,
         })))
       } else {
         let query = supabase
@@ -2723,6 +2931,7 @@ function AdminUsers({ auth }) {
   )
 }
 function Account({ auth }) {
+  const { language, t } = useLanguage()
   const navigate = useNavigate()
   const [profile, setProfile] = useState(auth.profile)
   const [addresses, setAddresses] = useState([])
@@ -2774,7 +2983,7 @@ function Account({ auth }) {
     event.preventDefault()
     const name = form.name.trim()
     if (!name) {
-      setError('Name cannot be empty.')
+      setError(t('Name cannot be empty.'))
       return
     }
     setSaving(true)
@@ -2789,7 +2998,7 @@ function Account({ auth }) {
       if (saveError) fail(saveError)
       setProfile(data)
       setForm({ name: data.name || '', phone: data.phone || '' })
-      setNotice('Your profile has been updated.')
+      setNotice(t('Your profile has been updated.'))
     } catch (saveError) {
       setError(saveError.message)
     } finally {
@@ -2816,11 +3025,11 @@ function Account({ auth }) {
       <main className="account-page">
         <div className="account-page-heading">
           <div>
-            <p className="eyebrow">Your account</p>
-            <h1>Profile & personal details</h1>
-            <p>Manage your contact information and delivery addresses.</p>
+            <p className="eyebrow">{t('Your account')}</p>
+            <h1>{t('Profile & personal details')}</h1>
+            <p>{t('Manage your contact information and delivery addresses.')}</p>
           </div>
-          <Link className="button" to="/account/addresses">Manage addresses</Link>
+          <Link className="button" to="/account/addresses">{t('Manage addresses')}</Link>
         </div>
         <Message error={error} />
 
@@ -2828,27 +3037,27 @@ function Account({ auth }) {
           <form className="card account-details-form" onSubmit={saveProfile}>
             <div className="account-card-heading">
               <span className="account-avatar">{(form.name || auth.user.email || 'U').trim().charAt(0).toUpperCase()}</span>
-              <div><h2>Personal details</h2><p>Update your name and contact number.</p></div>
+              <div><h2>{t('Personal details')}</h2><p>{t('Update your name and contact number.')}</p></div>
             </div>
-            <label htmlFor="account-name">Full name</label>
+            <label htmlFor="account-name">{t('Full name')}</label>
             <input id="account-name" autoComplete="name" required maxLength="120" value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} />
-            <label htmlFor="account-email">Email address</label>
+            <label htmlFor="account-email">{t('Email address')}</label>
             <input id="account-email" type="email" autoComplete="email" value={auth.user.email || ''} readOnly />
-            <small className="account-help">Email is managed by your sign-in provider.</small>
-            <label htmlFor="account-phone">Phone number</label>
-            <input id="account-phone" type="tel" autoComplete="tel" value={form.phone} onChange={event => setForm({ ...form, phone: event.target.value })} placeholder="Add a phone number" />
-            <button disabled={saving || loading}>{saving ? 'Saving…' : 'Save changes'}</button>
+            <small className="account-help">{t('Email is managed by your sign-in provider.')}</small>
+            <label htmlFor="account-phone">{t('Phone number')}</label>
+            <input id="account-phone" type="tel" autoComplete="tel" value={form.phone} onChange={event => setForm({ ...form, phone: event.target.value })} placeholder={t('Add a phone number')} />
+            <button disabled={saving || loading}>{saving ? t('Saving…') : t('Save changes')}</button>
             {notice && <p className="account-success" role="status">{notice}</p>}
           </form>
 
           <section className="card account-info-card">
-            <h2>Account information</h2>
-            {loading ? <p>Loading account details…</p> : (
+            <h2>{t('Account information')}</h2>
+            {loading ? <p>{t('Loading account details…')}</p> : (
               <dl className="account-info-list">
-                <div><dt>Account status</dt><dd>{profile?.status ? profile.status.replaceAll('_', ' ') : 'Not available'}</dd></div>
-                <div><dt>Account type</dt><dd>{auth.roles?.length ? auth.roles.map(role => role.replaceAll('_', ' ')).join(', ') : 'Customer'}</dd></div>
-                <div><dt>Member since</dt><dd>{profile?.created_at ? new Date(profile.created_at).toLocaleDateString('en-IN', { year: 'numeric', month: 'long', day: 'numeric' }) : 'Not available'}</dd></div>
-                <div><dt>Email verified</dt><dd>{auth.user.email_confirmed_at ? 'Verified' : 'Not verified'}</dd></div>
+                <div><dt>{t('Account status')}</dt><dd>{profile?.status ? t(profile.status.replaceAll('_', ' ')) : t('Not available')}</dd></div>
+                <div><dt>{t('Account type')}</dt><dd>{auth.roles?.length ? auth.roles.map(role => t(role.replaceAll('_', ' '))).join(', ') : t('Customer')}</dd></div>
+                <div><dt>{t('Member since')}</dt><dd>{profile?.created_at ? new Date(profile.created_at).toLocaleDateString(({ en: 'en-IN', hi: 'hi-IN', bn: 'bn-IN', gu: 'gu-IN' })[language], { year: 'numeric', month: 'long', day: 'numeric' }) : t('Not available')}</dd></div>
+                <div><dt>{t('Email verified')}</dt><dd>{auth.user.email_confirmed_at ? t('Verified') : t('Not verified')}</dd></div>
               </dl>
             )}
           </section>
@@ -2856,27 +3065,27 @@ function Account({ auth }) {
 
         <section className="card account-addresses">
           <div className="account-card-heading">
-            <div><h2>Saved delivery addresses</h2><p>{loading ? 'Loading addresses…' : `${addresses.length} saved ${addresses.length === 1 ? 'address' : 'addresses'}`}</p></div>
-            <Link to="/account/addresses">Add or edit addresses</Link>
+            <div><h2>{t('Saved delivery addresses')}</h2><p>{loading ? t('Loading addresses…') : `${addresses.length} ${t('saved addresses')}`}</p></div>
+            <Link to="/account/addresses">{t('Add or edit addresses')}</Link>
           </div>
-          {!loading && !addresses.length && <p className="account-empty-address">No saved addresses yet. Add one to make checkout quicker.</p>}
+          {!loading && !addresses.length && <p className="account-empty-address">{t('No saved addresses yet. Add one to make checkout quicker.')}</p>}
           <div className="account-address-list">
             {addresses.map(address => (
               <article key={address.id}>
-                <div><b>{address.label || 'Address'}{address.is_default && <span className="account-default-badge">Default</span>}</b></div>
+                <div><b>{t(address.label || 'Address')}{address.is_default && <span className="account-default-badge">{t('Default')}</span>}</b></div>
                 <p>{address.address_line}</p>
                 <p>{[address.city, address.state, address.postal_code].filter(Boolean).join(', ')}</p>
               </article>
             ))}
           </div>
         </section>
-        <section className="account-logout-section" aria-label="Account logout">
+        <section className="account-logout-section" aria-label={t('Account logout')}>
           <div>
-            <h2>Finished shopping?</h2>
-            <p>Sign out of your account on this device.</p>
+            <h2>{t('Finished shopping?')}</h2>
+            <p>{t('Sign out of your account on this device.')}</p>
           </div>
           <button type="button" className="account-logout-button" onClick={logout} disabled={loggingOut}>
-            {loggingOut ? 'Signing out…' : 'Log out'}
+            {loggingOut ? t('Signing out…') : t('Log out')}
           </button>
           {logoutError && <p className="account-logout-error" role="alert">{logoutError}</p>}
         </section>
@@ -2925,4 +3134,12 @@ function AppRoutes() {
     </Routes>
   )
 }
-export default function App() { return <BrowserRouter><AppRoutes /></BrowserRouter> }
+export default function App() {
+  return (
+    <BrowserRouter>
+      <LanguageProvider>
+        <AppRoutes />
+      </LanguageProvider>
+    </BrowserRouter>
+  )
+}
